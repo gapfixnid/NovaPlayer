@@ -1,0 +1,100 @@
+/** 렌더러 공용 상수 (main/settings.js 와 동일한 값 유지) */
+
+export const EQ_PRESETS = {
+  flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  rock: [5, 4, 2, -1, -2, 1, 4, 6, 6, 6],
+  pop: [-1, 0, 2, 4, 3, 0, -1, -1, 0, 1],
+  classical: [0, 0, 0, 0, 0, 0, -4, -4, -4, -5],
+  club: [0, 0, 3, 4, 4, 4, 2, 0, 0, 0],
+  dance: [6, 5, 2, 0, 1, 3, 4, 4, 3, 0],
+  fullbass: [8, 8, 8, 5, 2, 0, -3, -5, -6, -7],
+  fulltreble: [-6, -6, -6, -3, 1, 5, 8, 9, 9, 9],
+  live: [-3, 0, 2, 3, 3, 3, 2, 1, 1, 1],
+  party: [5, 5, 0, 3, 3, 3, 0, -2, -3, -3],
+  pop2: [2, 4, 5, 4, 2, 0, -1, -1, 0, 1],
+  soft: [3, 1, 0, -2, -3, -3, -2, 0, 2, 4],
+  bassboost: [7, 6, 4, 1, 0, 0, 0, 0, 0, 0],
+  karaoke: [0, 0, 0, -2, 4, 6, 6, 5, 0, 0],
+};
+
+export const EQ_PRESET_LABELS = {
+  flat: '플랫', rock: '록', pop: '팝', classical: '클래식', club: '클럽',
+  dance: '댄스', fullbass: '풀베이스', fulltreble: '풀트레블', live: '라이브',
+  party: '파티', pop2: '팝2', soft: '소프트', bassboost: '베이스+', karaoke: '노래방',
+};
+
+/** 단축키 항목의 사람이 읽는 이름 (설정 화면 표시용) */
+export const HOTKEY_LABELS = {
+  playPause: '재생 / 일시정지',
+  stop: '정지',
+  nextFile: '다음 파일',
+  prevFile: '이전 파일',
+  faster: '빠르게',
+  slower: '천천히',
+  normalSpeed: '정상 속도',
+  stepBackward: '1프레임 뒤로',
+  stepForward: '1프레임 앞으로',
+
+  seekBack5: '5초 뒤로',
+  seekForward5: '5초 앞으로',
+  seekBack30: '30초 뒤로',
+  seekForward30: '30초 앞으로',
+  seekBack60: '1분 뒤로',
+  seekForward60: '1분 앞으로',
+  seekBack10: '10초 뒤로 (PgUp)',
+  seekForward10: '10초 앞으로 (PgDn)',
+  seekBack300: '5분 뒤로',
+  seekForward300: '5분 앞으로',
+  relativeSeek1s: '정확히 1초 뒤로',
+  relativeSeekForward1s: '정확히 1초 앞으로',
+
+  volumeUp: '볼륨 올리기',
+  volumeDown: '볼륨 내리기',
+  volumeMute: '음소거 전환',
+  volumeReset: '볼륨 0',
+
+  fullscreen: '전체화면',
+  windowedFullscreen: '창 전체화면',
+  minimize: '최소화',
+  zoomNormal: '100%',
+  zoomFit: '화면에 맞게',
+  zoomAuto: '자동 확대',
+  zoomDouble: '200%',
+  rotateClockwise: '시계 방향 회전',
+  rotateCounter: '반시계 방향 회전',
+  flipHorizontal: '좌우 반전',
+  flipVertical: '상하 반전',
+  alwaysOnTop: '항상 위',
+
+  subtitleToggle: '자막 켜기/끄기',
+  subtitleDelayMinus: '자막 지연 줄이기',
+  subtitleDelayPlus: '자막 지연 늘리기',
+  subtitleSpeedUp: '자막 속도 빠르게',
+  subtitleSpeedDown: '자막 속도 느리게',
+  subtitleNextLang: '다음 자막 언어',
+  subtitlePrevLang: '이전 자막 언어',
+  aspectRatioNext: '다음 화면비',
+  aspectRatioReset: '화면비 원본',
+  colorCycle: '색상 보정 순환',
+
+  snapshot: '현재 장면 저장',
+  snapshotContinuous: '연속 저장 모드',
+  abLoop: 'A-B 반복 설정',
+  abLoopClear: 'A-B 반복 해제',
+  playlistToggle: '재생목록 패널',
+  infoPanel: '재생 정보 표시',
+  settings: '설정 열기',
+  osd: 'OSD 표시',
+  sleepTimer: '취침 타이머',
+  recentMenu: '최근 파일 메뉴',
+  playAndPause: '재생/일시정지 (전역)',
+  fileOpen: '파일 열기',
+  fileInfo: '파일 정보',
+  close: '종료',
+  seekBarFocus: '탐색바로 이동',
+};
+
+export const ASPECT_LABELS = {
+  auto: '원본', '1:1': '1:1', '4:3': '4:3', '16:9': '16:9',
+  '16:10': '16:10', '21:9': '21:9', '3:2': '3:2', '5:4': '5:4',
+};
