@@ -1,0 +1,27 @@
+# 의존성 (npm install 로 복원)
+node_modules/
+
+# 빌드 산출물
+dist/
+*.exe
+*.msi
+*.AppImage
+*.dmg
+
+# 개발 로그
+*.log
+gui-test-result.json
+gui-test-console.log
+
+# 생성형 테스트 미디어 (assets/make-test-media.js 로 재생성)
+assets/testmedia/
+
+# 개발용 스크린샷
+assets/shot*.png
+
+# 테스트 하네스 잔여물
+assets/.*-harness.cjs
+
+# OS
+.DS_Store
+Thumbs.db
