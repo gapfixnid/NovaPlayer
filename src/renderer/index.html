@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nova Player</title>
+<link rel="stylesheet" href="styles/base.css" />
+<link rel="stylesheet" href="styles/layout.css" />
+<link rel="stylesheet" href="styles/controls.css" />
+<link rel="stylesheet" href="styles/panels.css" />
+<link rel="stylesheet" href="styles/settings.css" />
+</head>
+<body class="booting">
+
+<!-- 색상 보정 중 감마만 CSS filter 로 표현할 수 없어 SVG 필터를 사용한다 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="novaGamma" color-interpolation-filters="sRGB">
+      <feComponentTransfer id="novaGammaTransfer">
+        <feFuncR type="gamma" amplitude="1" exponent="1" offset="0" />
+        <feFuncG type="gamma" amplitude="1" exponent="1" offset="0" />
+        <feFuncB type="gamma" amplitude="1" exponent="1" offset="0" />
+      </feComponentTransfer>
+    </filter>
+  </defs>
+</svg>
+
+<!-- ══════════════════ 상단 메뉴바 ══════════════════ -->
+<header id="menubar" class="menubar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" class="brand-logo" aria-hidden="true">
+      <path d="M12 2.5 21 7.5v9L12 21.5 3 16.5v-9z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M10 9.2v5.6l4.6-2.8z" fill="currentColor"/>
+    </svg>
+    <span class="brand-name">Nova<span>Player</span></span>
+  </div>
+
+  <nav class="menu-root" role="menubar" aria-label="주 메뉴">
+    <button class="menu-btn" data-menu="file"    role="menuitem" aria-haspopup="true">파일</button>
+    <button class="menu-btn" data-menu="play"    role="menuitem" aria-haspopup="true">재생</button>
+    <button class="menu-btn" data-menu="video"   role="menuitem" aria-haspopup="true">영상</button>
+    <button class="menu-btn" data-menu="audio"   role="menuitem" aria-haspopup="true">음성</button>
+    <button class="menu-btn" data-menu="subtitle" role="menuitem" aria-haspopup="true">자막</button>
+    <button class="menu-btn" data-menu="tools"   role="menuitem" aria-haspopup="true">도구</button>
+    <button class="menu-btn" data-menu="view"    role="menuitem" aria-haspopup="true">보기</button>
+    <button class="menu-btn" data-menu="help"    role="menuitem" aria-haspopup="true">도움말</button>
+  </nav>
+
+  <div class="menubar-right">
+    <button id="btn-minimize" class="win-btn" title="최소화" aria-label="최소화">
+      <svg viewBox="0 0 12 12"><rect x="2" y="5.5" width="8" height="1.2" fill="currentColor"/></svg>
+    </button>
+    <button id="btn-maximize" class="win-btn" title="최대화/복원" aria-label="최대화">
+      <svg class="ico-max" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      <svg class="ico-restore" viewBox="0 0 12 12" hidden><path d="M4.5 1.5h5v5M9.5 3.5v6h-6v-6" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.5" y="3.5" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2" fill-rule="evenodd"/></svg>
+    </button>
+    <button id="btn-close" class="win-btn win-close" title="닫기" aria-label="닫기">
+      <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>
+    </button>
+  </div>
+
+  <!-- 드롭다운 팝업은 JS 가 동적 생성 -->
+  <div id="menu-popup" class="menu-popup" hidden></div>
+</header>
+
+<!-- ══════════════════ 본문 ══════════════════ -->
+<main id="workspace" class="workspace">
+
+  <!-- ─────────── 비디오 영역 ─────────── -->
+  <section id="stage" class="stage" tabindex="-1">
+    <div id="video-fit" class="video-fit">
+      <video id="video" playsinline preload="metadata" crossorigin="anonymous"></video>
+      <canvas id="frame-overlay" class="frame-overlay" hidden></canvas>
+      <div id="subtitle-layer" class="subtitle-layer"></div>
+    </div>
+
+    <!-- 빈 상태 / 드롭존 -->
+    <div id="dropzone" class="dropzone">
+      <div class="dropzone-inner">
+        <svg viewBox="0 0 64 64" class="dz-icon" aria-hidden="true">
+          <rect x="6" y="14" width="52" height="36" rx="5" fill="none" stroke="currentColor" stroke-width="2.2"/>
+          <path d="M20 27l13 10-13 10z" fill="currentColor"/>
+          <path d="M38 28h12M38 34h12M38 40h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <h1>재생할 미디어가 없습니다</h1>
+        <p class="dz-hint">파일을 끌어다 놓거나 직접 열어 재생하세요</p>
+        <button id="dz-open" class="btn btn-primary dz-open-btn">파일 열기</button>
+        <p class="dz-formats">MP4 · MKV · AVI · MOV · WEBM · FLV · TS · RMVB · MP3 · FLAC · 이미지 시퀀스</p>
+      </div>
+    </div>
+
+    <!-- 재생 실패 / 변환 진행 표시 -->
+    <div id="recovery-overlay" class="recovery-overlay" hidden>
+      <div class="recovery-card">
+        <div class="spinner"></div>
+        <h3 id="recovery-title">이 형식을 변환하는 중입니다</h3>
+        <p id="recovery-desc">플레이어가 이 컨테이너를 직접 재생하지 못해 임시 변환을 수행합니다.</p>
+        <div class="progress"><div id="recovery-bar" class="progress-bar"></div></div>
+        <button id="recovery-cancel" class="btn btn-ghost btn-sm">취소</button>
+      </div>
+    </div>
+
+    <!-- OSD (볼륨/속도/효과 표시) -->
+    <div id="osd" class="osd" hidden>
+      <div id="osd-title" class="osd-title"></div>
+      <div id="osd-body" class="osd-body"></div>
+      <div id="osd-bar" class="osd-bar"><div id="osd-bar-fill" class="osd-bar-fill"></div></div>
+    </div>
+
+    <!-- 상단 정보 배지 -->
+    <div id="stage-top" class="stage-top">
+      <div id="now-playing" class="now-playing">
+        <span id="np-title" class="np-title"></span>
+        <span id="np-sub" class="np-sub"></span>
+      </div>
+      <div class="stage-badges">
+        <span id="badge-video-filter" class="badge" hidden>영상 효과</span>
+        <span id="badge-audio-filter" class="badge" hidden>음향 효과</span>
+        <span id="badge-aspect" class="badge" hidden></span>
+        <span id="badge-ab" class="badge badge-accent" hidden>A-B 반복</span>
+        <span id="badge-speed" class="badge" hidden></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── 재생목록 패널 ─────────── -->
+  <aside id="playlist-panel" class="playlist-panel">
+    <div class="pl-head">
+      <div class="pl-title">
+        재생목록
+        <span id="pl-count" class="pl-count">0</span>
+      </div>
+      <div class="pl-head-actions">
+        <button id="pl-collapse" class="icon-btn" title="패널 접기/펼치기" aria-label="패널 접기">
+          <svg viewBox="0 0 16 16"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <button id="pl-close" class="icon-btn" title="닫기" aria-label="닫기">
+          <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="pl-tools">
+      <input id="pl-filter" class="pl-filter" type="search" placeholder="필터…" aria-label="재생목록 필터" />
+      <div class="pl-tool-row">
+        <button id="pl-add"    class="icon-btn" title="파일 추가 (재생목록에 추가)">추가</button>
+        <button id="pl-remove" class="icon-btn" title="선택 항목 제거">제거</button>
+        <button id="pl-clear"  class="icon-btn" title="목록 비우기">비우기</button>
+      </div>
+      <div class="pl-tool-row">
+        <button id="pl-shuffle" class="icon-btn" title="셔플">셔플</button>
+        <button id="pl-repeat"  class="icon-btn" title="반복 모드">반복</button>
+        <button id="pl-sort"    class="icon-btn" title="정렬">정렬</button>
+        <button id="pl-import"  class="icon-btn" title="M3U/PLS 가져오기">가져오기</button>
+        <button id="pl-export"  class="icon-btn" title="M3U로 저장">내보내기</button>
+      </div>
+    </div>
+
+    <ul id="pl-list" class="pl-list" role="listbox" aria-label="재생목록" tabindex="0"></ul>
+
+    <div class="pl-foot">
+      <span id="pl-total" class="pl-total">총 00:00:00</span>
+      <div class="pl-foot-actions">
+        <button id="pl-up"   class="icon-btn" title="위로">▲</button>
+        <button id="pl-down" class="icon-btn" title="아래로">▼</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ══════════════════ 하단 컨트롤 ══════════════════ -->
+<footer id="controls" class="controls">
+  <!-- 탐색바 -->
+  <div id="seekbar" class="seekbar" role="slider" tabindex="0"
+       aria-label="재생 위치" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div id="seek-buffer" class="seek-buffer"></div>
+    <div id="seek-ranges" class="seek-ranges"></div>   <!-- A-B 구간 표시 -->
+    <div id="seek-played" class="seek-played"><div id="seek-knob" class="seek-knob"></div></div>
+    <div id="seek-hover-time" class="seek-hover-time" hidden>00:00:00</div>
+    <div id="seek-hover-pos" class="seek-hover-pos" hidden></div>
+    <div id="seek-preview" class="seek-preview" hidden><img id="seek-preview-img" alt="" /></div>
+    <!-- A-B 설정 마커 -->
+    <div id="ab-marker-a" class="ab-marker ab-marker-a" hidden></div>
+    <div id="ab-marker-b" class="ab-marker ab-marker-b" hidden></div>
+  </div>
+
+  <!-- 버튼 행 -->
+  <div class="ctrl-row">
+    <div class="ctrl-group ctrl-left">
+      <button id="btn-play" class="ctrl-btn ctrl-play" title="재생/일시정지 (Space)" aria-label="재생">
+        <svg class="ico-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
+        <svg class="ico-pause" viewBox="0 0 24 24" hidden><rect x="7" y="5.5" width="3.6" height="13" rx="1" fill="currentColor"/><rect x="13.4" y="5.5" width="3.6" height="13" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-stop" class="ctrl-btn" title="정지" aria-label="정지">
+        <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-prev" class="ctrl-btn" title="이전 파일 (P)" aria-label="이전 파일">
+        <svg viewBox="0 0 24 24"><path d="M18 6v12l-9-6z" fill="currentColor"/><rect x="6" y="6" width="2" height="12" rx="1" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-next" class="ctrl-btn" title="다음 파일 (N)" aria-label="다음 파일">
+        <svg viewBox="0 0 24 24"><path d="M6 6v12l9-6z" fill="currentColor"/><rect x="16" y="6" width="2" height="12" rx="1" fill="currentColor"/></svg>
+      </button>
+
+      <div class="time-display">
+        <span id="time-current">00:00:00</span>
+        <span class="time-sep">/</span>
+        <span id="time-total">00:00:00</span>
+      </div>
+
+      <!-- 볼륨 -->
+      <div class="volume" id="volume-wrap">
+        <button id="btn-mute" class="ctrl-btn" title="음소거 (M)" aria-label="음소거">
+          <svg class="ico-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" fill="currentColor"/><path d="M15 9.2a4 4 0 010 5.6M17.6 6.6a7.6 7.6 0 010 10.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <svg class="ico-mute" viewBox="0 0 24 24" hidden><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z" fill="currentColor"/><path d="M15.5 9.5l5 5M20.5 9.5l-5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+        <input id="volume" class="volume-slider" type="range" min="0" max="100" step="1" value="80" aria-label="볼륨" />
+      </div>
+    </div>
+
+    <div class="ctrl-group ctrl-center">
+      <button id="btn-frame-back" class="ctrl-btn" title="1프레임 뒤로 (&lt;)" aria-label="프레임 뒤로">
+        <svg viewBox="0 0 24 24"><path d="M16 6v12l-8-6z" fill="currentColor"/><path d="M7 5v14" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+      <button id="btn-frame-fwd" class="ctrl-btn" title="1프레임 앞으로 (&gt;)" aria-label="프레임 앞으로">
+        <svg viewBox="0 0 24 24"><path d="M8 6v12l8-6z" fill="currentColor"/><path d="M17 5v14" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+
+      <div class="speed-control" id="speed-wrap">
+        <button id="btn-speed" class="ctrl-btn ctrl-text" title="재생 속도">1.0x</button>
+        <div id="speed-menu" class="speed-menu" hidden>
+          <div class="speed-presets">
+            <button data-speed="0.1">0.1</button><button data-speed="0.25">0.25</button>
+            <button data-speed="0.5">0.5</button><button data-speed="0.75">0.75</button>
+            <button data-speed="1">1.0</button><button data-speed="1.25">1.25</button>
+            <button data-speed="1.5">1.5</button><button data-speed="1.75">1.75</button>
+            <button data-speed="2">2.0</button><button data-speed="2.5">2.5</button>
+            <button data-speed="3">3.0</button><button data-speed="4">4.0</button>
+            <button data-speed="8">8.0</button><button data-speed="16">16.0</button>
+            <button data-speed="32">32.0</button>
+          </div>
+          <label class="speed-slider-row">
+            <span>정밀</span>
+            <input id="speed-slider" type="range" min="10" max="320" value="100" />
+          </label>
+          <label class="speed-preserve">
+            <input id="speed-preserve-pitch" type="checkbox" checked />
+            <span>음높이 유지 (프리즘)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-group ctrl-right">
+      <button id="btn-ab" class="ctrl-btn" title="A-B 반복 (Ctrl+Alt+L)" aria-label="A-B 반복">
+        <svg viewBox="0 0 24 24"><path d="M7 8h4V6H7a3 3 0 000 6h2v-2H7a1 1 0 010-2z" fill="currentColor"/><path d="M17 16h-4v2h4a3 3 0 000-6h-2v2h2a1 1 0 010 2z" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-snapshot" class="ctrl-btn" title="현재 장면 저장 (S)" aria-label="스냅샷">
+        <svg viewBox="0 0 24 24"><path d="M9 4.5h6l1.2 2H20a1.5 1.5 0 011.5 1.5v10A1.5 1.5 0 0120 19.5H4A1.5 1.5 0 012.5 18V8A1.5 1.5 0 014 6.5h3.8z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+      <button id="btn-subtitles" class="ctrl-btn" title="자막 (B)" aria-label="자막">
+        <svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 10.5a2.6 2.6 0 100 3 2.6 2.6 0 100-3zM17 10.5a2.6 2.6 0 100 3 2.6 2.6 0 100-3z" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-info" class="ctrl-btn" title="파일 정보 (Shift+F1)" aria-label="정보">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.5v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.4" r="1.1" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-playlist" class="ctrl-btn" title="재생목록 (Ctrl+L)" aria-label="재생목록">
+        <svg viewBox="0 0 24 24"><path d="M3.5 6h12M3.5 11h12M3.5 16h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 12.5v6.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="16" cy="18.9" r="2.1" fill="currentColor"/><path d="M18 12.5l3.2-1.1v3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <button id="btn-fullscreen" class="ctrl-btn" title="전체화면 (F / Enter)" aria-label="전체화면">
+        <svg class="ico-fs" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <svg class="ico-fs-exit" viewBox="0 0 24 24" hidden><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+</footer>
+
+<!-- ══════════════════ 모달 / 패널 ══════════════════ -->
+<div id="modal-root" class="modal-root" hidden></div>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+<!-- 컨텍스트 메뉴 -->
+<div id="context-menu" class="context-menu" hidden></div>
+
+<!-- 볼륨 OSD (숨김 처리용) -->
+<div id="a11y-live" class="sr-only" aria-live="polite"></div>
+
+<script type="module" src="scripts/main.js"></script>
+</body>
+</html>

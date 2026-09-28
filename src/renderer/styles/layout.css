@@ -1,0 +1,312 @@
+/* ═══════════════════════════════════════════════════════════
+   layout.css — 앱 셸, 메뉴바, 스테이지, 비디오, 드롭존, OSD
+   ═══════════════════════════════════════════════════════════ */
+
+#app, body { display: flex; flex-direction: column; height: 100%; }
+
+body { transition: opacity .2s var(--ease); }
+
+/* ─────────── 메뉴바 ─────────── */
+.menubar {
+  position: relative;
+  z-index: 40;
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: var(--menubar-h);
+  padding: 0 0 0 10px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+body.no-menubar .menubar { display: none; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 12px;
+  margin-right: 4px;
+  border-right: 1px solid var(--line);
+  height: 100%;
+  color: var(--accent);
+}
+.brand-logo { width: 17px; height: 17px; }
+.brand-name {
+  font-size: .92em;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--fg-1);
+}
+.brand-name span { color: var(--accent); }
+
+.menu-root { display: flex; height: 100%; -webkit-app-region: no-drag; }
+.menu-btn {
+  height: 100%;
+  padding: 0 11px;
+  font-size: .95em;
+  color: var(--fg-1);
+  border-radius: 0;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.menu-btn:hover, .menu-btn[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg-0); }
+
+.menubar-right {
+  display: flex;
+  margin-left: auto;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+.win-btn {
+  width: 44px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--fg-1);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.win-btn svg { width: 12px; height: 12px; }
+.win-btn:hover { background: var(--bg-hover); color: var(--fg-0); }
+.win-close:hover { background: #d93025; color: #fff; }
+body.is-fullscreen .menubar { display: none; }
+
+/* ─────────── 워크스페이스 ─────────── */
+.workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  position: relative;
+  background: #000;
+  transition: opacity .2s var(--ease);
+}
+
+/* ─────────── 스테이지(비디오 영역) ─────────── */
+.stage {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  background: #000;
+  overflow: hidden;
+  outline: none;
+  cursor: default;
+}
+.stage.is-idle { cursor: none; }
+body.no-mouse .stage { cursor: none; }
+
+/* 비디오 피팅 컨테이너 (zoom/aspect/rotate 적용 지점) */
+.video-fit {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+#video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  background: #000;
+  object-fit: contain;
+  /* GPU 필터는 WebGL/canvas 대신 CSS filter 로 처리 (저사양 PC 에서도 부드러움) */
+}
+.stage.mode-fill #video { object-fit: cover; width: 100%; height: 100%; }
+.stage.mode-1x1 #video { object-fit: contain; width: 100%; height: 100%; }
+
+/* 프레임 단위 이동 시 정지 화면으로 덮는 캔버스 */
+.frame-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ─────────── 빈 상태 / 드롭존 ─────────── */
+.dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 42%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    var(--bg-0);
+  transition: opacity .22s var(--ease);
+}
+.dropzone[hidden] { display: none; }
+.dropzone-inner { text-align: center; max-width: 520px; padding: 24px; }
+.dz-icon { width: 84px; height: 84px; color: var(--fg-3); margin: 0 auto 18px; }
+.dropzone h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 10px; color: var(--fg-1); }
+.dz-hint { color: var(--fg-2); margin: 0 0 18px; font-size: 1.02em; }
+.dz-open-btn { margin-bottom: 22px; height: 34px; padding: 0 22px; font-size: 1em; }
+.dz-formats { color: var(--fg-3); font-size: .9em; letter-spacing: .01em; }
+
+body.is-dragging .dropzone {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 42%, var(--accent-strong), transparent 70%),
+    var(--bg-0);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+body.is-dragging .dropzone-inner::after {
+  content: "놓으면 재생목록에 추가됩니다";
+  display: block;
+  margin-top: 14px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ─────────── 복구(변환) 오버레이 ─────────── */
+.recovery-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / .82);
+  backdrop-filter: blur(3px);
+}
+.recovery-overlay[hidden] { display: none; }
+.recovery-card {
+  width: min(440px, 86vw);
+  padding: 26px 28px;
+  text-align: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+.recovery-card h3 { margin: 16px 0 8px; font-size: 1.12em; font-weight: 600; }
+.recovery-card p { margin: 0 0 18px; color: var(--fg-2); font-size: .95em; line-height: 1.55; }
+
+.spinner {
+  width: 34px; height: 34px;
+  margin: 0 auto;
+  border: 3px solid var(--bg-active);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #fff));
+  transition: width .25s var(--ease);
+}
+
+/* ─────────── OSD ─────────── */
+.osd {
+  position: absolute;
+  z-index: 18;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 190px;
+  max-width: 70%;
+  padding: 14px 20px 16px;
+  border-radius: var(--radius-lg);
+  background: rgb(8 10 14 / .82);
+  border: 1px solid rgb(255 255 255 / .1);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-2);
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s var(--ease), transform .2s var(--ease);
+}
+.osd[hidden] { display: none; }
+.osd.show { opacity: 1; }
+.osd[data-pos="bottom"] { bottom: 12%; }
+.osd[data-pos="top"] { top: 14%; }
+.osd[data-pos="center"] { top: 50%; transform: translate(-50%, -50%); }
+
+.osd-title {
+  font-size: 1.02em;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 4px;
+  letter-spacing: .01em;
+}
+.osd-body {
+  font-size: 1.5em;
+  font-weight: 300;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.osd-body small { font-size: .58em; color: #9aa4b4; margin-left: 4px; }
+.osd-bar {
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / .16);
+  overflow: hidden;
+}
+.osd-bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width .18s var(--ease);
+}
+.osd-bar.hidden { display: none; }
+
+/* ─────────── 상단 정보 배지 ─────────── */
+.stage-top {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 12;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .25s var(--ease);
+  background: linear-gradient(to bottom, rgb(0 0 0 / .55), transparent);
+}
+.stage-top.show { opacity: 1; }
+
+.now-playing { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.np-title {
+  font-size: 1.05em;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 4px rgb(0 0 0 / .9);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 52vw;
+}
+.np-sub {
+  font-size: .88em;
+  color: #b8c0cc;
+  text-shadow: 0 1px 3px rgb(0 0 0 / .9);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 52vw;
+}
+.stage-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+/* ─────────── 전체화면 ─────────── */
+body.is-fullscreen .workspace { height: 100vh; }
+body.is-fullscreen .controls {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 50;
+  background: linear-gradient(to top, rgb(0 0 0 / .82), rgb(0 0 0 / .55));
+  border-top-color: transparent;
+}
+body.is-fullscreen .controls { --controls-h: 74px; }
