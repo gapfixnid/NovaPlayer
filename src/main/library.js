@@ -119,10 +119,14 @@ class Library extends JsonStore {
   // ── 재생 위치 기억 ────────────────────────────────────────
   savePosition(filePath, position, duration) {
     if (!filePath) return;
+    // 비수치(NaN·문자열) 입력은 저장하지 않는다 (JSON null 오염 방지)
+    const p = Number(position);
+    const d = Number(duration);
+    if (!Number.isFinite(p) || p < 0) return;
     const key = filePath.toLowerCase();
     this.data.playbackPositions[key] = {
-      p: Math.max(0, Math.floor(position || 0)),
-      d: Math.floor(duration || 0),
+      p: Math.floor(p),
+      d: Number.isFinite(d) && d >= 0 ? Math.floor(d) : 0,
       at: Date.now(),
     };
     this.scheduleSave(1500);
@@ -180,9 +184,11 @@ function playlistFilePath(title = 'Nova Player') {
 
 async function writeM3u(filePath, items) {
   const lines = ['#EXTM3U'];
+  const clean = (s) => String(s ?? '').replace(/[\r\n]/g, ' ').slice(0, 1024);
   for (const it of items) {
-    lines.push(`#EXTINF:-1,${it.name ?? path.basename(it.path)}`);
-    lines.push(it.path);
+    if (!it || typeof it.path !== 'string') continue;
+    lines.push(`#EXTINF:-1,${clean(it.name ?? path.basename(it.path))}`);
+    lines.push(clean(it.path));
   }
   await fsp.mkdir(path.dirname(filePath), { recursive: true });
   await fsp.writeFile(filePath, lines.join('\n'), 'utf8');

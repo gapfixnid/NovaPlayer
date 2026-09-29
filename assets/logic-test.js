@@ -534,6 +534,46 @@ check('지연 변경은 즉시 이동 (앵커 유지)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+console.log('\n[11] 파서 강건성 (회귀 가드)');
+
+check('MicroDVD 파이프 개행', () => {
+  const { cues } = parser.parseSubtitles('{25}{100}첫 줄|둘째 줄', { fps: 25 });
+  assert(cues.length === 1, `cue 수 ${cues.length}`);
+  assert(cues[0].text === '첫 줄\n둘째 줄', JSON.stringify(cues[0].text));
+  assert(!cues[0].text.includes('|'), '리터럴 파이프 잔존');
+  return '줄바꿈 변환';
+});
+
+check('첫 cue 이전 되감기 크래시 없음', () => {
+  const { cues } = parser.parseSubtitles(`1
+00:00:05,000 --> 00:00:07,000
+A
+
+2
+00:00:10,000 --> 00:00:12,000
+B
+`);
+  let r = parser.findActiveCues(cues, 11, 0);
+  assert(r.active.length === 1, '11초 활성');
+  r = parser.findActiveCues(cues, 0, r.hint);
+  assert(r.active.length === 0, '0초 비활성');
+  return '예외 없이 빈 활성';
+});
+
+check('비정상 수치 cue 탈락', () => {
+  const { cues } = parser.parseSubtitles('{"cues": [{"start": "abc", "end": null, "text": "x"}]}');
+  assert(cues.length === 0, `통과 ${cues.length}개`);
+  return 'NaN cue 제거';
+});
+
+check('JSON style 프로토타입 차단', () => {
+  const evil = '{"cues": [{"start": 1, "end": 2, "text": "x", "style": {"__proto__": {"pwn": 1}}}]}';
+  parser.parseSubtitles(evil);
+  assert({}.pwn === undefined, '프로토타입 오염됨');
+  return '차단됨';
+});
+
+// ─────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(56)}`);
 console.log(`결과: 통과 ${pass} / 실패 ${fail}`);
 if (fail) {

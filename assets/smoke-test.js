@@ -4,11 +4,15 @@
  *
  * 검증 항목
  *   1) main 모듈 로드 (문법 + 초기화 오류)
- *   2) 설정 저장/불일치 복원
+ *   2) 설정 저장/불일치 복원/프로토타입 오염 차단
  *   3) ffmpeg / ffprobe 경로 해석
  *   4) ffprobe 로 샘플 미디어 프로빙
- *   5) 자막 파서 (SRT / VTT / ASS / EUC-KR 디코딩)
- *   6) 오디오 DSP 그래프는 브라우저 전용 → 정적 점검으로 대체
+ *   5) 자막 인코딩 디코딩 (UTF-8/EUC-KR 바이트→문자열)
+ *   6) M3U 왕복 + 인젝션 차단, 위치 저장 검증
+ *   7) 미디어 URL allowlist (발급-검증-미등록 차단)
+ *
+ * 주의: 자막 파서(SRT/VTT/ASS)와 오디오 DSP는 각각 logic-test.js와
+ * gui-test.js에서 검증한다 (브라우저/ESM 의존).
  */
 const path = require('node:path');
 const fs = require('node:fs');
@@ -233,6 +237,56 @@ check('확장자 분류', () => {
     const p = lib.uniquePath(dir, 'shot', '.png');
     assert(p !== path.join(dir, 'shot.png'), '중복 경로 반환');
     return path.basename(p);
+  });
+
+  // ─────────────────────────────────────────────────────────
+  console.log('\n[6b] 보안 회귀');
+  check('프로토타입 오염 차단 (도트 경로)', () => {
+    const store = new JsonStore('smoke-poison.json', DEFAULT_SETTINGS);
+    store.set('__proto__.polluted', 1);
+    store.set('audio.__proto__.x', 1);
+    assert({}.polluted === undefined, 'Object.prototype 오염됨');
+    assert(store.get('audio.volume') === DEFAULT_SETTINGS.audio.volume, '정상값 손상');
+    return '차단됨';
+  });
+
+  check('프로토타입 오염 차단 (패치 병합)', () => {
+    const store = new JsonStore('smoke-poison2.json', DEFAULT_SETTINGS);
+    store.set(JSON.parse('{"__proto__":{"pwn":1}}'));
+    assert({}.pwn === undefined, '병합 경로 오염됨');
+    return '차단됨';
+  });
+
+  check('위치 저장 비수치 거부', () => {
+    lib.library.savePosition('C:\\test\\a.mp4', NaN, 'abc');
+    const got = lib.library.getPosition('C:\\test\\a.mp4');
+    assert(got === null || got === undefined, `오염 저장됨: ${JSON.stringify(got)}`);
+    return '거부됨';
+  });
+
+  try {
+    const evilM3u = path.join(tmp, 'evil.m3u');
+    await lib.writeM3u(evilM3u, [{ path: path.join(tmp, 'a.mp4'), name: 'x\n#EXTINF:666,evil' }]);
+    const evilLines = fs.readFileSync(evilM3u, 'utf8').split('\n');
+    check('M3U 인젝션 차단', () => {
+      assert(!evilLines.some((l) => l.startsWith('#EXTINF:666')), '위조 항목 삽입됨');
+      return '개행 제거됨';
+    });
+  } catch (err) {
+    check('M3U 인젝션 차단', () => { throw err; });
+  }
+
+  // eslint-disable-next-line global-require
+  const protocol = require('../src/main/protocol.js');
+  check('미디어 allowlist', () => {
+    assert(typeof protocol.isAllowed === 'function', 'isAllowed 미노출');
+    const f = path.join(tmp, 'allowed.mp4');
+    fs.writeFileSync(f, 'x');
+    const url = protocol.toMediaUrl(f);
+    assert(protocol.isAllowed(f), '발급 직후 허용돼야 함');
+    assert(!protocol.isAllowed(path.join(tmp, 'not-issued.mp4')), '미발급 경로 허용됨');
+    assert(typeof url === 'string' && url.startsWith('nova-media://'), 'URL 형식');
+    return '발급-검증-차단';
   });
 
   // ─────────────────────────────────────────────────────────

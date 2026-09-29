@@ -27,7 +27,10 @@ function initPaths(userDataDir) {
 
 /** 캐시 정리 (용량 초과 시 오래된 파일부터) */
 function pruneCache(maxMB) {
-  const limit = maxMB * 1024 * 1024;
+  // 비수치·0 이하 입력은 기본값으로 (NaN 비교가 false라 캐시 전삭제되는 사고 방지)
+  const mb = Number(maxMB);
+  const safeMB = Number.isFinite(mb) && mb > 0 ? mb : 2048;
+  const limit = safeMB * 1024 * 1024;
   let entries;
   try { entries = fs.readdirSync(paths.cache); } catch { return 0; }
   const files = [];

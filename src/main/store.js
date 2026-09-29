@@ -7,6 +7,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+/** 프로토타입 오염 키 — 설정 경로·병합 어디에서도 허용하지 않는다 */
+const POISON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function isPoisonKey(k) {
+  return typeof k === 'string' && POISON_KEYS.has(k);
+}
+
 class JsonStore {
   /**
    * @param {string} fileName 저장 파일명
@@ -14,8 +20,7 @@ class JsonStore {
    * @param {object} [opts]
    * @param {boolean} [opts.deep] 기본값과 병합할 때 객체 키까지 병합할지
    */
-  constructor(fileName, defaults, opts = {}) {
-    this.fileName = fileName;
+  constructor(fileName, defaults, opts = {}) {    this.fileName = fileName;
     this.defaults = defaults;
     this.deep = opts.deep !== false;
     this.data = this._load();
@@ -47,6 +52,7 @@ class JsonStore {
   _merge(target, patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return target;
     for (const [key, val] of Object.entries(patch)) {
+      if (isPoisonKey(key)) continue; // 프로토타입 오염 차단
       if (!(key in target)) continue; // 알 수 없는 키는 버림(오타 방지)
       if (
         this.deep &&
@@ -65,14 +71,20 @@ class JsonStore {
 
   get(key, fallback) {
     if (key === undefined) return this.data;
-    return key.split('.').reduce((acc, k) => (acc == null ? acc : acc[k]), this.data) ?? fallback;
+    const parts = String(key).split('.');
+    if (parts.some(isPoisonKey)) return fallback;
+    return parts.reduce((acc, k) => (acc == null ? acc : acc[k]), this.data) ?? fallback;
   }
 
   set(keyOrPatch, value) {
     if (typeof keyOrPatch === 'object' && keyOrPatch !== null) {
       this._merge(this.data, keyOrPatch);
     } else {
-      const keys = keyOrPatch.split('.');
+      const keys = String(keyOrPatch).split('.');
+      if (keys.some(isPoisonKey)) {
+        global.novaLog?.warn(`차단된 설정 키: ${keyOrPatch}`);
+        return this.data;
+      }
       const last = keys.pop();
       let node = this.data;
       for (const k of keys) {

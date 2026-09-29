@@ -10,7 +10,9 @@ KMPlayer급 편의 기능을 목표로 한다: 다양한 코덱 지원, 풍부�
 ## 개인정보 원칙
 
 - 인앱 광고·서드파티 스크립트 없음
-- 재생 중 외부 네트워크 통신 전면 차단 (`http/https/ws` 요청 차단 + CSP)
+- 앱 내부의 외부 네트워크 요청 차단 (`http/https/ws` + CSP 이중 방어,
+  로컬 파일은 allowlist 등록된 미디어만 `nova-media://` 로 서빙)
+- 단, 사용자가 명시적으로 여는 외부 링크·폴더는 기본 브라우저/탐색기로 열린다
 - 사용 통계·크래시 리포트 수집 없음 (관련 코드 자체가 없음)
 - 재생 이력·설정은 로컬 JSON(`%APPDATA%/Nova Player`)에만 저장
 - 관리자 권한 요구 없음
@@ -27,13 +29,12 @@ npm run dev      # 개발자 도구와 함께 실행
 ## 테스트
 
 ```powershell
-node assets\logic-test.js   # 렌더러 로직 단위 테스트 (자막 파서, 유틸)
-node assets\smoke-test.js   # main 프로세스·ffmpeg·인코딩 스모크 테스트
-node assets\gui-test.js     # Electron 실제 구동 GUI 테스트
+npm test            # 로직 단위 + main 스모크 (logic-test, smoke-test)
+npm run test:gui    # Electron 실제 구동 GUI 테스트 (재생·복구 체인·IPC·보안)
 node assets\make-test-media.js  # 테스트용 샘플 미디어 생성
 ```
 
-## 패키징
+## 패키징 (Windows x64 전용)
 
 ```powershell
 npm run dist     # NSIS 설치본 + 포터블 EXE (build/icon.ico 사용)

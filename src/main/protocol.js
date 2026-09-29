@@ -133,6 +133,11 @@ function registerHandlers() {
     if (!filePath || !path.isAbsolute(filePath)) {
       return new Response('Bad media request', { status: 400 });
     }
+    // allowlist 미등록 경로(직접 조립 URL 등)는 서빙하지 않는다
+    if (!isAllowed(filePath)) {
+      logger.warn(`nova-media 접근 차단(미등록): ${filePath.slice(0, 120)}`);
+      return new Response('Forbidden', { status: 403 });
+    }
 
     let stat;
     try {
@@ -203,11 +208,42 @@ function safeRealpath(p) {
 }
 
 /**
+ * 미디어 접근 allowlist.
+ * toMediaUrl() 발급 시점에만 등록되고, 핸들러는 등록된 실경로만 서빙한다.
+ * 렌더러가 base64를 직접 조립해 임의 파일을 읽는 우회를 막는다.
+ * (삽입순 유지 Map, 상한 초과 시 가장 오래된 항목부터 제거)
+ */
+const allowedMedia = new Map();
+const ALLOWLIST_LIMIT = 1000;
+
+function allowKey(realPath) {
+  return process.platform === 'win32' ? realPath.toLowerCase() : realPath;
+}
+
+function allowFile(filePath) {
+  const real = safeRealpath(filePath) ?? path.resolve(filePath);
+  allowedMedia.delete(allowKey(real));
+  allowedMedia.set(allowKey(real), Date.now());
+  while (allowedMedia.size > ALLOWLIST_LIMIT) {
+    allowedMedia.delete(allowedMedia.keys().next().value);
+  }
+  return real;
+}
+
+function isAllowed(filePath) {
+  const real = safeRealpath(filePath);
+  if (!real) return false;
+  return allowedMedia.has(allowKey(real));
+}
+
+/**
  * filePath → nova-media:// URL
  * Windows 드라이브 문자(콜론)는 base64 로 감춰 URL 파싱 문제를 피한다.
+ * 호출과 동시에 allowlist에 등록된다 (서빙 허용의 유일한 경로).
  */
 function toMediaUrl(filePath) {
   const normalized = path.resolve(filePath);
+  allowFile(normalized);
   const b64 = Buffer.from(normalized, 'utf8').toString('base64url');
   return `${MEDIA_SCHEME}://f/${b64}`;
 }
@@ -224,4 +260,4 @@ function fromMediaUrl(url) {
   }
 }
 
-module.exports = { registerPrivileged, registerHandlers, toMediaUrl, fromMediaUrl, APP_SCHEME, MEDIA_SCHEME, RENDERER_ROOT };
+module.exports = { registerPrivileged, registerHandlers, toMediaUrl, fromMediaUrl, isAllowed, allowFile, APP_SCHEME, MEDIA_SCHEME, RENDERER_ROOT };

@@ -524,17 +524,20 @@ function parseAssOverride(tag, current) {
 // ─────────────────────────────────────────────────────────────
 function parseMicroDvd(text, fps = 25) {
   const cues = [];
+  const rate = Number.isFinite(fps) && fps > 0 ? fps : 25;
   const re = /\{(\d+)\}\{(\d+)\}([^\n]*)/g;
   let m;
   let index = 0;
   while ((m = re.exec(text)) !== null) {
-    const start = Number(m[1]) / fps;
-    const end = Number(m[2]) / fps;
+    const start = Number(m[1]) / rate;
+    const end = Number(m[2]) / rate;
     const body = m[3]
       .replace(/\|\s*\{[yi]\}/g, '')
       .replace(/\{[ybBWI]:([^}]*)\}/g, '<i>$1</i>')
       .replace(/\{y:i\}/g, '<i>')
-      .replace(/\{\\}/g, '');
+      .replace(/\{\\}/g, '')
+      // MicroDVD에서 | 는 줄바꿈이다 (스타일 태그 처리 후 남은 것만 변환)
+      .replace(/\|/g, '\n');
     if (!body.trim()) continue;
     index += 1;
     const cue = makeCue({ index, start, end, text: body.replace(/<br\s*\/?>/gi, '\n') });
@@ -556,7 +559,13 @@ function parseJsonSub(text) {
       end: c.end ?? c.to ?? (c.start ?? 0) + 3,
       text: c.text ?? c.body ?? '',
     });
-    if (c.style) Object.assign(cue.style, c.style);
+    if (c.style && typeof c.style === 'object') {
+      // __proto__ 등 프로토타입 오염 키 차단
+      for (const [k, v] of Object.entries(c.style)) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        cue.style[k] = v;
+      }
+    }
     return cue;
   });
 }
@@ -596,7 +605,9 @@ export function parseSubtitles(text, opts = {}) {
     case 'json': cues = parseJsonSub(text); break;
     default: cues = parseSrt(text);
   }
-  return { format, cues: sortCues(cues.filter((c) => c.text)) };
+  // 비정상 수치(NaN/Infinity) cue는 렌더 탐색을 깨뜨리므로 탈락시킨다
+  const valid = (c) => c.text && Number.isFinite(c.start) && Number.isFinite(c.end);
+  return { format, cues: sortCues(cues.filter(valid)) };
 }
 
 /**
@@ -639,7 +650,8 @@ export function findActiveCues(cues, time, hint = 0) {
   // 커서 보정: 현재 시각보다 뒤에 있으면 되감긴 것이므로 뒤에서부터 재탐색
   let i = Number.isInteger(hint) ? Math.min(Math.max(0, hint), n) : 0;
   if (i < n && cues[i].start > time) {
-    // 앞으로 갈 수 있는 최대 인덱스를 이진 탐색으로 구한 뒤 거기서 역방향 스캔
+    // 앞으로 갈 수 있는 최대 인덱스를 이진 탐색으로 구한 뒤 거기서 역방향 스캔.
+    // time이 첫 cue보다 빠르면 lo=0이므로 -1이 되지 않게 하한을 둔다.
     let lo = 0;
     let hi = n;
     while (lo < hi) {
@@ -647,7 +659,7 @@ export function findActiveCues(cues, time, hint = 0) {
       if (cues[mid].start <= time) lo = mid + 1;
       else hi = mid;
     }
-    i = lo - 1;
+    i = Math.max(0, lo - 1);
   }
 
   // 활성화될 수 있는 마지막 인덱스에서 뒤로 이동.

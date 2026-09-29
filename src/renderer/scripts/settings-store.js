@@ -16,11 +16,14 @@ import { Emitter } from './util.js';
 
 function getPath(obj, path) {
   if (path === undefined || path === null || path === '') return obj;
-  return String(path).split('.').reduce((acc, k) => (acc == null ? acc : acc[k]), obj);
+  const parts = String(path).split('.');
+  if (parts.some(isPoisonKey)) return undefined;
+  return parts.reduce((acc, k) => (acc == null ? acc : acc[k]), obj);
 }
 
 function setPath(obj, path, value) {
   const keys = String(path).split('.');
+  if (keys.some(isPoisonKey)) return false;
   const last = keys.pop();
   let node = obj;
   for (const k of keys) {
@@ -28,6 +31,13 @@ function setPath(obj, path, value) {
     node = node[k];
   }
   node[last] = value;
+  return true;
+}
+
+/** 프로토타입 오염 키 */
+const POISON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function isPoisonKey(k) {
+  return typeof k === 'string' && POISON_KEYS.has(k);
 }
 
 function isPlainObject(v) {
@@ -37,6 +47,7 @@ function isPlainObject(v) {
 /** patch 를 기존 데이터에 깊은 병합 */
 function mergePatch(target, patch) {
   for (const [k, v] of Object.entries(patch)) {
+    if (isPoisonKey(k)) continue; // 프로토타입 오염 차단
     if (isPlainObject(v) && isPlainObject(target[k])) mergePatch(target[k], v);
     else target[k] = v;
   }

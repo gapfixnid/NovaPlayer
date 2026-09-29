@@ -10,6 +10,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "test": "node assets/logic-test.js && node assets/smoke-test.js",
+    "test:gui": "node assets/gui-test.js",
     "dist": "electron-builder --win --x64",
     "pack": "electron-builder --dir"
   },
@@ -31,6 +33,7 @@
     ],
     "files": [
       "src/**/*",
+      "assets/icon.png",
       "package.json"
     ],
     "win": {

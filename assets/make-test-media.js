@@ -73,7 +73,7 @@ const TARGETS = [
   },
   {
     name: '09-10bit-hevc.mkv',
-    note: '10bit HEVC —硬件 지원이 없으면 소프트웨어 디코딩',
+    note: '10bit HEVC — 하드웨어 가속이 없으면 소프트웨어 디코딩',
     args: ['-c:v', 'libx265', '-preset', 'ultrafast', '-crf', '30', '-pix_fmt', 'yuv420p10le', '-x265-params', 'profile=main10:log-level=none', ...AUDIO_ARGS],
     ext: 'mkv',
   },
@@ -123,6 +123,10 @@ for (const t of TARGETS) {
 }
 
 console.log(`\n완료: ${ok}/${TARGETS.length}개 생성됨`);
+if (ok !== TARGETS.length) {
+  // CI 실패 전파: 하나라도 실패하면 0이 아닌 종료 코드
+  process.exitCode = 1;
+}
 
 // 자막 샘플도 함께 만든다 (SRT + ASS, 한국어)
 const subs = path.join(outDir, 'subtitles');
@@ -135,7 +139,7 @@ Nova Player 자막 테스트
 2
 00:00:03,000 --> 00:00:05,500
 SRT 포맷 정상 표시
-\\N줄바꿈도 됩니다
+줄바꿈도 됩니다
 
 3
 00:00:06,000 --> 00:00:08,000
@@ -188,3 +192,30 @@ console.log('  - sample.srt (UTF-8 SRT)');
 console.log('  - sample.ass (ASS, 스타일/위치/카라오케)');
 console.log('  - utf8.srt (UTF-8)');
 console.log('  - euckr.src.srt → euckr.srt (위 명령으로 CP949 변환)');
+console.log('  - sample.vtt (WebVTT, 인라인 태그/cue 설정)');
+console.log('  - sample.microdvd.sub (MicroDVD, 프레임 기반)');
+console.log('  - sample.json (자체 JSON 형식)');
+
+// WebVTT (2성분 시각 + 인라인 태그 + cue 설정)
+fs.writeFileSync(path.join(subs, 'sample.vtt'), `WEBVTT
+
+intro
+00:01.000 --> 00:03.500 align:start position:10%
+<c.yellow>강조</c> 텍스트
+
+00:01:02.500 --> 00:01:05.000 size:80%
+둘째 자막
+`, 'utf8');
+
+// MicroDVD ({시작프레임}{끝프레임}텍스트, | 는 줄바꿈, 25fps 기준)
+fs.writeFileSync(path.join(subs, 'sample.microdvd.sub'), `{25}{100}첫 줄|둘째 줄
+{125}{200}강조 {y:i}기울임{y:i} 끝
+`, 'utf8');
+
+// 자체 JSON 형식
+fs.writeFileSync(path.join(subs, 'sample.json'), JSON.stringify({
+  cues: [
+    { start: 1, end: 3.5, text: 'JSON 자막 첫 줄' },
+    { start: 62.5, end: 65, text: 'JSON 자막 둘째 줄', style: { bold: true } },
+  ],
+}, null, 2), 'utf8');

@@ -110,7 +110,11 @@ app.whenReady().then(async () => {
     });
 
     const wc = win.webContents;
-    await new Promise((r) => wc.once('did-finish-load', r));
+    // did-finish-load 경합 방지: 이미 로드됐으면 대기하지 않는다
+    await Promise.race([
+      new Promise((r) => wc.once('did-finish-load', r)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('렌더러 로드 30초 타임아웃')), 30000)),
+    ]);
     console.log('\\n[1] 부팅');
     check('창 생성', true);
     check('렌더러 로드 완료', true);
@@ -128,11 +132,6 @@ app.whenReady().then(async () => {
         hasSeekbar: !!q('#seekbar'),
         hasPlayBtn: !!q('#btn-play'),
         hasPlaylist: !!q('#playlist-panel'),
-        // 설정 대화상자는 열 때만 DOM 에 만들어지므로
-        // 존재 여부가 아니라 "열 수 있는지" 로 검증한다
-        canOpenSettings: (() => {
-          try { window.__t = 1; return true; } catch { return false; }
-        })(),
         dropzoneVisible: !q('#dropzone')?.hidden,
         // 모듈 로드 여부 (에러가 있었다면 hotkeys 등이 null)
         modules: {
@@ -311,6 +310,82 @@ app.whenReady().then(async () => {
       console.log('  SKIP 샘플 없음 (make-test-media.js 필요)');
     }
 
+    // ── 복구 체인: 전 샘플 probe + remux/transcode 실동작 ──
+    // baseline 1종만으로는 README의 복구 주장을 검증할 수 없어
+    // 테스트 미디어 전종을 훑는다.
+    // 주의: 아래 렌더러 스크립트는 작은따옴표+문자열 결합만 쓴다.
+    // (하네스 생성 시 특수문자 이스케이프 변형을 피하기 위함)
+    console.log('\\n[2b] recovery chain');
+    const sampleFiles = fs.existsSync(SAMPLES)
+      ? fs.readdirSync(SAMPLES).filter(function (f) { return /[.](mp4|mkv|avi|flv|webm|m4a|flac)$/i.test(f); }).sort()
+      : [];
+    const sampleListJson = JSON.stringify(sampleFiles.map((f) => ({ name: f, path: path.join(SAMPLES, f) })));
+    const flvEntryJson = JSON.stringify(sampleFiles.filter((f) => f.toLowerCase().endsWith('.flv')).map((f) => ({ name: f, path: path.join(SAMPLES, f) }))[0] || null);
+    const aviEntryJson = JSON.stringify(sampleFiles.filter((f) => /mpeg2video|mp2v|04-/i.test(f)).map((f) => ({ name: f, path: path.join(SAMPLES, f) }))[0] || null);
+    if (!sampleFiles.length) {
+      console.log('  SKIP samples missing (run make-test-media.js)');
+    } else {
+      // 1) 전 샘플 ffprobe: duration + 스트림 존재 필수
+      const probeAll = await wc.executeJavaScript(
+        '(async () => { const api = window.nova; const out = []; const files = ' + sampleListJson + '; ' +
+        'for (const f of files) { try { const info = await api.media.probe(f.path); ' +
+        'out.push({ name: f.name, ok: !!(info && info.duration > 0 && (info.streams || []).length > 0), ' +
+        'detail: info ? (info.duration.toFixed(1) + "s/" + (info.streams || []).length + "streams") : "null" }); } ' +
+        'catch (e) { out.push({ name: f.name, ok: false, detail: "ERR:" + e.message }); } } ' +
+        'return out; })()'
+      ).catch((e) => [{ name: '_harness', ok: false, detail: e.message }]);
+      const probeBad = probeAll.filter((p) => !p.ok);
+      check('all-samples probe', probeBad.length === 0,
+        probeBad.length ? ('failed: ' + probeBad.map((p) => p.name + '(' + p.detail + ')').join(', ')) : (probeAll.length + ' samples probed'));
+
+      // 2) remux 실동작: FLV(H.264+MP3)는 네이티브 불가 → MKV 재포장 후 재생돼야 함
+      const playFile = '(async (file) => { const api = window.nova; const v = document.querySelector("#video"); ' +
+        'const url = await api.media.toUrl(file); v.muted = true; v.src = url; ' +
+        'const loaded = await new Promise((resolve) => { ' +
+        'const t = setTimeout(() => resolve("timeout"), 30000); ' +
+        'v.addEventListener("loadedmetadata", () => { clearTimeout(t); resolve("ok"); }, { once: true }); ' +
+        'v.addEventListener("error", () => { clearTimeout(t); resolve("error"); }, { once: true }); ' +
+        'v.load(); }); ' +
+        'if (loaded !== "ok") return { loaded: loaded }; ' +
+        'try { await v.play(); await new Promise((r) => setTimeout(r, 1200)); } ' +
+        'catch (e) { return { loaded: loaded, playErr: e.name }; } ' +
+        'return { loaded: loaded, playing: !v.paused && v.currentTime > 0.1, w: v.videoWidth, h: v.videoHeight }; })';
+      const remuxed = await wc.executeJavaScript(
+        '(async () => { const api = window.nova; const entry = ' + flvEntryJson + '; ' +
+        'if (!entry) return { skipped: true }; ' +
+        'let out; try { out = await api.media.remux(entry.path); } ' +
+        'catch (e) { return { error: String((e && e.message) || e) }; } ' +
+        'if (!out || typeof out !== "string") return { error: "empty remux output" }; ' +
+        'const r = await (' + playFile + ')(out); r.out = out; return r; })()'
+      ).catch((e) => ({ error: e.message }));
+      if (remuxed.skipped) {
+        console.log('  SKIP no FLV sample');
+      } else {
+        check('remux recovery (FLV->MKV plays)', remuxed.playing === true,
+          remuxed.error || ('loaded=' + remuxed.loaded + ' playing=' + remuxed.playing + ' ' + remuxed.w + 'x' + remuxed.h));
+      }
+
+      // 3) transcode 실동작: MPEG-2 AVI는 네이티브 경로가 없으므로
+      //    H.264 변환본이 나와 재생돼야 함 (저해상도로 빠르게 검증)
+      const transcoded = await Promise.race([
+        wc.executeJavaScript(
+          '(async () => { const api = window.nova; const entry = ' + aviEntryJson + '; ' +
+          'if (!entry) return { skipped: true }; ' +
+          'let result; try { result = await api.media.transcode(entry.path, { width: 320, quality: 0 }); } ' +
+          'catch (e) { return { error: String((e && e.message) || e) }; } ' +
+          'if (!result || !result.path) return { error: "empty transcode output" }; ' +
+          'const r = await (' + playFile + ')(result.path); r.cached = !!result.cached; return r; })()'
+        ).catch((e) => ({ error: e.message })),
+        new Promise((resolve) => setTimeout(() => resolve({ error: 'transcode 180s timeout' }), 180000)),
+      ]);
+      if (transcoded.skipped) {
+        console.log('  SKIP no MPEG-2 AVI sample');
+      } else {
+        check('transcode recovery (MPEG-2->H.264 plays)', transcoded.playing === true,
+          transcoded.error || ('loaded=' + transcoded.loaded + ' playing=' + transcoded.playing + ' cached=' + transcoded.cached));
+      }
+    }
+
     // ── ffprobe IPC ──
     // 각 호출을 독립 try/catch 로 감싸 어느 핸들러가 실패하는지 정확히 식별한다.
     // (하나가 reject 되면 전체가 무효가 되던 기존 구조 수정)
@@ -343,7 +418,8 @@ app.whenReady().then(async () => {
     check('로그 읽기', typeof ipc.logTail === 'string' && ipc.logTail.length > 0, \`\${typeof ipc.logTail === 'string' ? ipc.logTail.split('\\n').length + '줄' : ''}\${ipcErr('logTail')}\`);
     check('스냅샷 폴더', typeof ipc.snapshotDir === 'string' && ipc.snapshotDir.length > 0, \`\${typeof ipc.snapshotDir === 'string' ? String(ipc.snapshotDir).split('\\\\\\\\').slice(-2).join('\\\\\\\\') : ''}\${ipcErr('snapshotDir')}\`);
     check('최근 목록 IPC', Array.isArray(ipc.recentList), \`\${Array.isArray(ipc.recentList) ? ipc.recentList.length + '개' : ''}\${ipcErr('recentList')}\`);
-    check('ffprobe IPC', ipc.probe === 'has-info' || ipc.probe === 'null', \`\${ipc.probe}\${ipcErr('probe')}\`);
+    check('ffprobe IPC', sampleFiles.length ? ipc.probe === 'has-info' : ipc.probe === 'null',
+      sampleFiles.length ? \`\${ipc.probe}\${ipcErr('probe')}\` : '샘플 없음 (null 기대)');
 
     // ── 보안 정책 ──
     console.log('\\n[4] 보안');
@@ -419,6 +495,15 @@ app.on('window-all-closed', () => {});
 
 const harnessFile = path.join(__dirname, '.gui-harness.cjs');
 fs.writeFileSync(harnessFile, HARNESS, 'utf8');
+// 생성된 하네스 구문 self-check: 이스케이프 실수로 깨진 하네스가
+// "App threw an error" 로만 보고되는 사고를 방지한다
+try {
+  require('node:child_process').execFileSync(process.execPath, ['--check', harnessFile], { stdio: 'pipe' });
+} catch (e) {
+  try { fs.unlinkSync(harnessFile); } catch { /* noop */ }
+  console.error('하네스 생성 실패 (구문 오류): ' + String((e.stdout || e.stderr || e.message)).split('\n').slice(0, 6).join('\n'));
+  process.exit(2);
+}
 
 const args = [harnessFile, '--no-sandbox', `--user-data-dir=${require('node:os').tmpdir()}\\nova-gui-test-profile`];
 const child = spawn(electron, args, {

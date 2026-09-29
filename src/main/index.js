@@ -169,9 +169,15 @@ function applyNetworkPolicy() {
   ses.webRequest.onBeforeRequest((details, callback) => {
     let scheme;
     try { scheme = new URL(details.url).protocol; } catch { scheme = ''; }
-    const isLocal = details.url.startsWith('nova-media:') || details.url.startsWith('app:') || details.url.startsWith('devtools:') || details.url.startsWith('blob:') || details.url.startsWith('data:') || details.url.startsWith('file:');
+    // file: 은 제외한다. 로컬 파일 접근은 nova-media:// allowlist 경로로만 허용하고,
+    // 렌더러의 file:// 직접 접근은 차단한다 (file:는 blocked 집합에 없어도 명시).
+    const isLocal = details.url.startsWith('nova-media:') || details.url.startsWith('app:') || details.url.startsWith('devtools:') || details.url.startsWith('blob:') || details.url.startsWith('data:');
     if (blocked.has(scheme) && !isLocal) {
       logger.info(`외부 통신 차단: ${details.url.slice(0, 120)}`);
+      return callback({ cancel: true });
+    }
+    if (scheme === 'file:') {
+      logger.info(`file:// 직접 접근 차단: ${details.url.slice(0, 120)}`);
       return callback({ cancel: true });
     }
     callback({ cancel: false });
@@ -375,9 +381,30 @@ function registerGlobalShortcuts() {
   }
 }
 
+/**
+ * Electron accelerator 형식 검증.
+ * 수정자가 아닌 키가 맨 뒤에 하나 있어야 하고, 수정자는 알려진 것만 허용한다.
+ * 형식이 아니면 전역 단축키 등록을 건너뛴다 (잘못된 값으로 시스템 키 가로채기 방지).
+ */
 function isValidAccelerator(a) {
-  const { globalShortcut: gs } = require('electron');
-  return !!(gs.isRegistered(a) || typeof a === 'string');
+  if (typeof a !== 'string' || a.length === 0 || a.length > 64) return false;
+  const MODS = new Set([
+    'Control', 'Ctrl', 'Alt', 'AltGr', 'Shift', 'Meta', 'Super', 'Command', 'Cmd',
+    'CommandOrControl', 'CmdOrCtrl', 'Option',
+  ]);
+  const parts = a.split('+');
+  if (parts.length < 1 || parts.some((p) => p.length === 0)) return false;
+  const key = parts[parts.length - 1];
+  // 키 자리에 수정자만 있으면 무효 (bare modifier)
+  if (MODS.has(key)) return false;
+  for (const m of parts.slice(0, -1)) {
+    if (!MODS.has(m)) return false;
+  }
+  // 키는 1문자 또는 영숫자/펑션키/미디어키 형태
+  if (!/^[A-Za-z0-9]$/.test(key) && !/^(F\d{1,2}|Space|Tab|Enter|Escape|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Arrow(Up|Down|Left|Right)|Media(PlayPause|Stop|NextTrack|PrevTrack)|AudioVolume(Mute|Up|Down)|PrintScreen|ScrollLock|Pause|Numlock|Capslock|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash|Backquote)$/.test(key)) {
+    return false;
+  }
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -516,7 +543,7 @@ function registerIpc() {
   ipcMain.on('shell:showItemInFolder', (_e, p) => { if (isSafePath(p)) shell.showItemInFolder(p); });
   ipcMain.handle('shell:openPath', async (_e, p) => { if (isSafePath(p)) return shell.openPath(p); return ''; });
   ipcMain.handle('shell:trash', async (_e, p) => { if (isSafePath(p)) return shell.trashItem(p); return false; });
-  ipcMain.on('shell:revealFolder', (_e, p) => { if (p) shell.openPath(p); });
+  ipcMain.on('shell:revealFolder', (_e, p) => { if (isSafePath(p)) shell.openPath(p); });
 
   // ── 미디어 처리 ──
   ipcMain.handle('media:toUrl', (_e, p) => (isSafePath(p) ? protocol.toMediaUrl(p) : null));
@@ -524,17 +551,38 @@ function registerIpc() {
   ipcMain.handle('media:remux', (_e, p) => (isSafePath(p) && settings.get('ffmpeg.remuxFallback') ? ffmpeg.remux(p) : null));
   ipcMain.handle('media:transcode', (e, p, opts) => {
     if (!isSafePath(p) || !settings.get('ffmpeg.transcodeFallback')) return null;
+    const o = opts ?? {};
+    const width = num(o.width, 1920, 16, 7680);
+    const quality = num(o.quality, 0, 0, 2);
+    const audioBitrate = /^\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
+      ? o.audioBitrate : '192k';
     const controller = new AbortController();
     e.sender.once('media:transcodeCancel', () => controller.abort());
-    return ffmpeg.transcode(p, { ...opts, signal: controller.signal });
+    return ffmpeg.transcode(p, { ...o, width, quality, audioBitrate, signal: controller.signal });
   });
   ipcMain.handle('media:frame', (_e, p, t, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForFrameStep')) return null;
-    return ffmpeg.extractFrame(p, t, opts);
+    if (!Number.isFinite(t) || t < 0) return null;
+    const o = opts ?? {};
+    return ffmpeg.extractFrame(p, t, {
+      ...o,
+      width: num(o.width, 480, 16, 3840),
+      quality: num(o.quality, 4, 0, 31),
+    });
   });
   ipcMain.handle('media:strip', (_e, p, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForThumbnails')) return null;
-    const out = ffmpeg.thumbnailStrip(p, opts?.count ?? 12, opts);
+    const o = opts ?? {};
+    // 타일 폭탄(tile=10000x10000 등) 방지: 수치 범위를 강제한다
+    const count = num(o.count, 12, 1, 60);
+    const safe = {
+      ...o,
+      count,
+      tileW: num(o.tileW, 160, 16, 640),
+      tileH: num(o.tileH, 90, 16, 640),
+      cols: num(o.cols, 6, 1, 12),
+    };
+    const out = ffmpeg.thumbnailStrip(p, count, safe);
     if (!out) return null;
     return { ...out, url: protocol.toMediaUrl(out.file) };
   });
@@ -544,6 +592,11 @@ function registerIpc() {
   ipcMain.handle('sub:read', async (_e, p) => {
     if (!isSafePath(p)) return null;
     try {
+      // 대용량 파일 readFile 폭탄 방지 (자막은 통상 수백KB 이하)
+      const st = await fsp.stat(p);
+      if (!st.isFile() || st.size > 8 * 1024 * 1024) {
+        throw new Error('자막 파일이 너무 큽니다 (8MB 제한).');
+      }
       const text = await lib.readTextSmart(p);
       return { path: p, name: path.basename(p), text };
     } catch (err) {
@@ -609,18 +662,34 @@ function registerIpc() {
     return r.filePath;
   });
   ipcMain.handle('playlist:library', () => lib.library.data.playlist);
-  ipcMain.handle('playlist:librarySave', (_e, items) => { lib.library.setPlaylist(items); return true; });
+  ipcMain.handle('playlist:librarySave', (_e, items) => {
+    if (!Array.isArray(items)) return false;
+    lib.library.setPlaylist(items.filter((it) => it && isSafePath(it.path)));
+    return true;
+  });
 
   // ── 최근 사용 ──
-  ipcMain.handle('recent:list', (_e, limit) => lib.library.getRecent(limit ?? settings.get('privacy.historyMax')));
-  ipcMain.handle('recent:push', (_e, p, meta) => { lib.library.pushRecent(p, meta); return true; });
-  ipcMain.handle('recent:remove', (_e, p) => { lib.library.removeRecent(p); return true; });
+  ipcMain.handle('recent:list', (_e, limit) => lib.library.getRecent(num(limit, settings.get('privacy.historyMax'), 1, 200)));
+  ipcMain.handle('recent:push', (_e, p, meta) => {
+    if (!isSafePath(p)) return false;
+    lib.library.pushRecent(p, meta);
+    return true;
+  });
+  ipcMain.handle('recent:remove', (_e, p) => {
+    if (typeof p !== 'string') return false;
+    lib.library.removeRecent(p);
+    return true;
+  });
   ipcMain.handle('recent:clear', () => { lib.library.clearRecent(); return true; });
   ipcMain.handle('recent:resolve', (_e, p) => (isSafePath(p) && fs.existsSync(p) ? p : null));
 
   // ── 위치 기억 ──
-  ipcMain.handle('position:save', (_e, p, pos, dur) => { lib.library.savePosition(p, pos, dur); return true; });
-  ipcMain.handle('position:get', (_e, p) => lib.library.getPosition(p));
+  ipcMain.handle('position:save', (_e, p, pos, dur) => {
+    if (!isSafePath(p)) return false;
+    lib.library.savePosition(p, pos, dur);
+    return true;
+  });
+  ipcMain.handle('position:get', (_e, p) => (isSafePath(p) ? lib.library.getPosition(p) : null));
 
   // ── 스냅샷 ──
   ipcMain.handle('snapshot:dir', () => lib.resolveSnapshotDir(settings.get('snapshot.folder')));
@@ -639,6 +708,13 @@ function registerIpc() {
     const dir = lib.resolveSnapshotDir(settings.get('snapshot.folder'));
     const safeName = lib.buildSnapshotName(payload?.name ?? 'capture', { name: 'capture', hours: 0, minutes: 0, seconds: 0, year: 2000, month: 0, day: 1, index: 0 });
     const ext = /^\.(png|jpg|jpeg)$/i.test(payload?.ext ?? '') ? payload.ext.toLowerCase() : '.png';
+    // 비정상 페이로드(문자열 위장·초대형 배열) 차단: 렌더러 이미지 한도 50MB
+    if (!payload?.bytes || typeof payload.bytes.length !== 'number') {
+      throw new Error('잘못된 이미지 데이터입니다.');
+    }
+    if (payload.bytes.length === 0 || payload.bytes.length > 50 * 1024 * 1024) {
+      throw new Error('이미지 크기가 허용 범위를 벗어났습니다 (50MB 제한).');
+    }
     const target = lib.uniquePath(dir, safeName, ext);
     await fsp.writeFile(target, Buffer.from(payload.bytes));
     logger.debug(`스냅샷 저장: ${target}`);
@@ -648,6 +724,12 @@ function registerIpc() {
   // ── 디렉터리 목록 (폴더 열기) ──
   ipcMain.handle('media:listDirectory', async (_e, dir, { recursive = false } = {}) => {
     if (!isSafePath(dir)) return [];
+    try {
+      const st = await fsp.stat(dir);
+      if (!st.isDirectory()) return [];
+    } catch {
+      return [];
+    }
     const out = [];
     const walk = async (current, depth) => {
       let entries;
@@ -678,12 +760,13 @@ function registerIpc() {
   // ── 진단 ──
   ipcMain.handle('diag:ffmpeg', () => ffmpeg.describe());
   ipcMain.handle('diag:logTail', async (_e, lines = 200) => {
+    const n = num(lines, 200, 1, 2000);
     try {
       const dir = paths.logs;
       const files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.log')).sort();
       if (!files.length) return [];
       const text = await fsp.readFile(path.join(dir, files.at(-1)), 'utf8');
-      return text.split('\n').slice(-lines).join('\n');
+      return text.split('\n').slice(-n).join('\n');
     } catch {
       return [];
     }
@@ -721,6 +804,13 @@ function isSafePath(p) {
   if (typeof p !== 'string' || p.length === 0 || p.length > 4096) return false;
   if (p.includes('\0')) return false;
   return path.isAbsolute(p);
+}
+
+/** 렌더러 전달 수치를 정수 범위로 강제 (필터 인젝션·리소스 폭탄 방지) */
+function num(v, def, lo, hi) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(hi, Math.max(lo, Math.floor(n)));
 }
 
 /** 파일명에서 언어 코드 추출 (ko-KR, kor, korean, eng, en …) */
