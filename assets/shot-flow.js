@@ -78,6 +78,49 @@ const FLOWS = {
     out.videoAfter = rect('#video');
     return JSON.stringify(out);
   })()`,
+  // 단축키 진단: 맵 존재 여부 + Space 실동작 + aria 변화 추적
+  hkdiag: `(async () => {
+    const api = window.nova;
+    const out = {};
+    try {
+      const map = await api.settings.get('hotkeys.map');
+      const keys = Object.keys(map || {});
+      out.mapKeys = keys.length;
+      out.spaceAction = keys.find((k) => (map[k] || []).includes('Space')) || null;
+      out.playPauseKeys = map.playPause || null;
+    } catch (e) { out.mapErr = String(e.message || e); }
+    const v = document.querySelector('#video');
+    const btn = document.querySelector('#btn-play');
+    const url = await api.media.toUrl(SAMPLE).catch((e) => 'ERR:' + e.message);
+    if (typeof url === 'string' && url.length > 0) {
+      v.muted = true;
+      v.src = url;
+      document.querySelector('#dropzone').hidden = true;
+      await new Promise((resolve) => {
+        const t = setTimeout(() => resolve(), 15000);
+        v.addEventListener('loadedmetadata', () => { clearTimeout(t); resolve(); }, { once: true });
+        v.load();
+      });
+      try { await v.play(); } catch (e) { out.playErr = e.name; }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    out.playing = !v.paused;
+    const pressWin = (key) => window.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    );
+    pressWin(' ');
+    await new Promise((r) => setTimeout(r, 400));
+    out.afterWinPaused = v.paused;
+    out.afterWinAria = btn.getAttribute('aria-label');
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    out.afterBodyPaused = v.paused;
+    out.afterBodyAria = btn.getAttribute('aria-label');
+    out.t = +v.currentTime.toFixed(2);
+    return JSON.stringify(out);
+  })()`,
   // 전체화면 진입 후 캡처 (영상전용 UI 검증)
   fullscreen: `(async () => {
     await window.nova.window.fullscreen();

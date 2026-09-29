@@ -193,9 +193,11 @@ class AudioEngine {
       this.nodes.gain = gain;
 
       // 분석용 (ReplayGain 추정)
+      // 반드시 볼륨 게인 이전(outMerger)에서 탭한다.
+      // 게인 이후를 재면 볼륨 위치에 따라 측정이 왜곡돼 과보정된다.
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
-      gain.connect(analyser);
+      outMerger.connect(analyser);
       this.nodes.analyser = analyser;
       this.analyserBuf = new Float32Array(analyser.fftSize);
 
@@ -246,24 +248,28 @@ class AudioEngine {
       ramp(f.gain, db);
     });
 
-    // 베이스
-    ramp(this.nodes.bassShelf.gain, clamp((settings.bassBoost ?? 0) * 0.6, 0, 20));
+    // 베이스 (UI 표기 dB 그대로 적용)
+    ramp(this.nodes.bassShelf.gain, clamp(settings.bassBoost ?? 0, 0, 20));
     this.nodes.bassShelf.frequency.value = clamp(settings.bassFreq ?? 100, 40, 400);
     ramp(this.nodes.superBass.gain, clamp(settings.superBass ?? 0, -15, 15));
     ramp(this.nodes.vocal.gain, clamp(settings.vocalBoost ?? 0, -15, 15));
     ramp(this.nodes.treble.gain, clamp(settings.treble ?? 0, -15, 15));
 
     // 정규화
+    // OFF 여도 안전 리미터로 동작시켜 EQ 스택 폭주를 막는다.
+    // 임계 -1dB라 평상시 피크에는 투명하고, 클리핑 직전만 잡는다.
     const norm = !!settings.normalizer;
-    ramp(this.nodes.normalizer.ratio, norm ? 14 : 1);
-    ramp(this.nodes.normalizer.threshold, norm ? (settings.normalizerTarget ?? -18) : -60);
+    ramp(this.nodes.normalizer.ratio, norm ? 14 : 20);
+    ramp(this.nodes.normalizer.threshold, norm ? (settings.normalizerTarget ?? -18) : -1);
 
     // 3D 서라운드
+    // cross 부스트분만큼 dry를 낮춰 합산 피크를 보상한다 (클리핑 방지)
     const depth = settings.surround ? clamp((settings.surroundDepth ?? 50) / 100, 0, 1) * 0.75 : 0;
+    const dry = 1 - depth * 0.5;
     this.surroundNodes.crossL.gain.value = depth;
     this.surroundNodes.crossR.gain.value = depth;
-    this.surroundNodes.dryL.gain.value = 1;
-    this.surroundNodes.dryR.gain.value = 1;
+    this.surroundNodes.dryL.gain.value = dry;
+    this.surroundNodes.dryR.gain.value = dry;
 
     // 밸런스
     ramp(this.nodes.panner.pan, clamp((settings.balance ?? 0) / 100, -1, 1));

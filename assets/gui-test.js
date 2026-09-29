@@ -279,19 +279,32 @@ app.whenReady().then(async () => {
         // ── 단축키 end-to-end: Space → 일시정지 → 재생 (HotkeyManager 실동작) ──
         const hk = await wc.executeJavaScript(\`(async () => {
           const v = document.querySelector('#video');
+          // 포커스 상태에 따라 Space가 입력으로 먹을 수 있어(설계상 정상),
+          // 단축키 자체의 동작 검증 전에 포커스를 body로 돌린다
+          if (document.activeElement && document.activeElement !== document.body) {
+            document.activeElement.blur();
+          }
           const press = (key) => window.dispatchEvent(
             new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
           );
+          const ae = () => {
+            const a = document.activeElement;
+            return a ? (a.tagName + (a.type ? '[' + a.type + ']' : '') + (a.id ? '#' + a.id : '')) : 'none';
+          };
           const before = v.paused;
           press(' ');
           await new Promise((r) => setTimeout(r, 400));
           const midPaused = v.paused;
           const midAria = document.querySelector('#btn-play').getAttribute('aria-label');
+          const midFocus = ae();
+          const midModal = !!document.querySelector('#modal-root .modal');
+          let mapKeys = -1;
+          try { mapKeys = Object.keys(await window.nova.settings.get('hotkeys.map')).length; } catch (e) { mapKeys = 'ERR:' + e.message; }
           press(' ');
           await new Promise((r) => setTimeout(r, 400));
-          return { before, midPaused, midAria, resumed: !v.paused };
+          return { before, midPaused, midAria, midFocus, midModal, mapKeys, resumed: !v.paused };
         })()\`).catch((e) => ({ error: e.message }));
-        check('단축키 일시정지(Space)', hk.midPaused === true, hk.error ?? \`paused=\${hk.midPaused}\`);
+        check('단축키 일시정지(Space)', hk.midPaused === true, hk.error ?? \`paused=\${hk.midPaused} focus=\${hk.midFocus} modal=\${hk.midModal} map=\${hk.mapKeys}\`);
         check('단축키 재생 재개(Space)', hk.resumed === true, hk.error ?? \`resumed=\${hk.resumed}\`);
       }
     } else {

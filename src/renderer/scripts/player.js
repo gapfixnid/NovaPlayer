@@ -28,7 +28,6 @@ class Player extends EventTarget {
     this.info = null;
     this.loadToken = 0;          // 비동기 로드 경합 방지
     this.fallbackStage = 'none'; // none | native | remux | transcode
-    this.transcodeCtrl = null;
     this.abLoop = { a: null, b: null };
     this.sleepTimer = null;
     this.savedPosition = 0;
@@ -97,6 +96,9 @@ class Player extends EventTarget {
    */
   async load(filePath, opts = {}) {
     const token = ++this.loadToken;
+    // 이전 파일의 진행 중 변환이 있으면 중단 요청 (메인 ffmpeg abort).
+    // 응답을 기다리지 않는다: 새 로드가 우선이다.
+    try { this.api.media.cancelTranscode(); } catch { /* noop */ }
     this.currentPath = filePath;
     this.fallbackStage = 'native';
     this.abLoop = { a: null, b: null };
@@ -126,11 +128,14 @@ class Player extends EventTarget {
   }
 
   async _onLoadedMetadata() {
+    // 메타데이터 시점의 토큰을 캡처: 느린 probe가 새 파일을 덮지 못하게 한다
+    const token = this.loadToken;
+    const probedPath = this.currentPath;
     // ffprobe 로 상세 정보 수집 (비동기, 재생에 영향 없음)
     if (this.fallbackStage === 'native' && this.api.media.probe) {
       this.api.media.probe(this.currentPath)
         .then((info) => {
-          if (!info) return;
+          if (!info || token !== this.loadToken || this.currentPath !== probedPath) return;
           this.info = info;
           if (info.video?.frameRate) this.frameRate = info.video.frameRate;
           if (info.video?.videoRotation) this._emit('rotation', info.video.videoRotation);
@@ -334,30 +339,38 @@ class Player extends EventTarget {
    * 표시 중인 필터(밝기/대비/색상)를 함께 적용하기 위해
    * 캔버스로 한 번 복제한 뒤 ctx.filter 로 보정한다.
    *
-   * @returns {Promise<{blob: Blob, width: number, height: number, url: string}>}
+   * @param {object} opts
+   *   applyFilters: CSS 필터 적용 여부
+   *   rotation: 사용자 회전(도, videoCtl.rotation 전달)
+   *   flipH/flipV: 사용자 뒤집기
+   * @returns {Promise<{blob: Blob, width: number, height: number}>}
+   *   (ObjectURL을 만들지 않아 revoke 누수가 없다)
    */
-  async captureFrame({ applyFilters = true } = {}) {
+  async captureFrame({ applyFilters = true, rotation = 0, flipH = false, flipV = false } = {}) {
     const v = this.video;
     if (!v.videoWidth || v.readyState < 2) throw new Error('캡처할 프레임이 없습니다.');
 
+    // 전체 회전(메타+사용자). 90/270도면 캔버스 가로세로를 맞바꿔야 잘리지 않는다
+    const metaRot = ((this._metaRotation ?? 0) % 360 + 360) % 360;
+    const userRot = ((rotation ?? 0) % 360 + 360) % 360;
+    const totalRot = (metaRot + userRot) % 360;
+    const swap = totalRot === 90 || totalRot === 270;
+
     const canvas = document.createElement('canvas');
-    canvas.width = v.videoWidth;
-    canvas.height = v.videoHeight;
+    canvas.width = swap ? v.videoHeight : v.videoWidth;
+    canvas.height = swap ? v.videoWidth : v.videoHeight;
     const ctx = canvas.getContext('2d');
 
-    // 회전/뒤집기 반영
-    const rot = ((this._metaRotation ?? 0) % 360 + 360) % 360;
+    // 원점 중심 변환으로 회전+뒤집기를 한 번에 적용
     ctx.save();
-    if (rot) {
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate((rot * Math.PI) / 180);
-      if (rot === 90 || rot === 270) {
-        ctx.translate(-canvas.height / 2, -canvas.width / 2);
-      }
-    }
-    ctx.drawImage(v, 0, 0);
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    if (totalRot) ctx.rotate((totalRot * Math.PI) / 180);
+    ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+    ctx.drawImage(v, -v.videoWidth / 2, -v.videoHeight / 2, v.videoWidth, v.videoHeight);
+    ctx.restore();
 
-    // CSS 필터 중 canvas 가 지원하는 부분만 적용 (url(#gamma) 는 제외)
+    // CSS 필터 중 canvas 가 지원하는 부분만 적용 (url(#gamma) 는 제외).
+    // 변환이 끝난 깨끗한 상태에서 수행해야 clearRect 잔상이 남지 않는다.
     if (applyFilters) {
       const css = (v.style.filter || '')
         .replace(/url\([^)]*\)\s*/g, '')
@@ -370,13 +383,14 @@ class Player extends EventTarget {
           const lctx = layer.getContext('2d');
           lctx.filter = css;
           lctx.drawImage(canvas, 0, 0);
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.filter = 'none';
           ctx.drawImage(layer, 0, 0);
+          ctx.restore();
         } catch { /* 필터 미지원 시 원본 그대로 */ }
       }
     }
-    ctx.restore();
 
     const format = this.api.settings.get('snapshot.format') === 'jpg' ? 'image/jpeg' : 'image/png';
     const quality = (this.api.settings.get('snapshot.quality') ?? 95) / 100;
@@ -385,12 +399,7 @@ class Player extends EventTarget {
       canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('이미지 생성 실패'))), format, quality);
     });
 
-    return {
-      blob,
-      width: canvas.width,
-      height: canvas.height,
-      url: URL.createObjectURL(blob),
-    };
+    return { blob, width: canvas.width, height: canvas.height };
   }
 
   // ─────────────────────────────────────────────────────────

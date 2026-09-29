@@ -5,7 +5,7 @@
  * 실제 동작은 각 모듈( player / audio / video / subtitles / ui/* )에 있고,
  * 여기서는 모듈 간 이벤트와 설정을 연결한다.
  */
-import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden } from './util.js';
+import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden, computeSubTime, reanchorSubClock } from './util.js';
 import state from './state.js';
 import { Player } from './player.js';
 import { audio } from './audio.js';
@@ -89,6 +89,15 @@ async function boot() {
   player.api = app;
   state.settings = settings.get();
   subRenderer.setSettings(settings.get('subtitle'));
+
+  // 저장 동기화 실패 알림 (5초 디듀프 — 슬라이더 조작 폭주 방지)
+  let lastSyncErrToast = 0;
+  settings.on('sync-error', ({ error } = {}) => {
+    const now = Date.now();
+    if (now - lastSyncErrToast < 5000) return;
+    lastSyncErrToast = now;
+    toastWarn(`설정 저장에 실패했습니다 (${error?.message ?? error})`);
+  });
 
   applySettings(settings.get());
 
@@ -239,12 +248,17 @@ function onSettingChanged(path, value) {
     updateBadges();
   }
   if (path.startsWith('audio.')) {
+    // 엔진 내부 baseGain/muted를 먼저 동기화해야 apply() 게인 계산이 맞는다
+    if (path === 'audio.volume') audio.setVolume(s.audio.volume);
+    if (path === 'audio.muted') audio.setMuted(s.audio.muted);
     audio.apply(s.audio);
     if (path === 'audio.volume') controls.setVolume(s.audio.volume);
     if (path === 'audio.muted') controls.setMuted(s.audio.muted);
     updateBadges();
   }
   if (path.startsWith('subtitle.')) {
+    // 배속 변경은 state 갱신 전에旧 배속으로 앵커를 고정해야 싱크가 유지된다
+    if (path === 'subtitle.speed') resyncSubClock();
     subRenderer.setSettings(s.subtitle);
     subRenderer.setReadingMode(s.subtitle.readingMode);
     if (path === 'subtitle.delay') state.subtitles.delay = s.subtitle.delay;
@@ -568,10 +582,27 @@ function bindPlayer() {
   requestAnimationFrame(renderSubtitles);
 }
 
-/** 자막 시간 = 영상 시간 + 지연, 배속 반영 */
+/** 자막 시간 (앵커 상대 모델: 배속 변경에도 싱크 유지) */
+const subClock = { anchorMedia: 0, anchorSub: 0, speed: 1, delayMs: 0 };
 function subTime(mediaTime) {
-  const speed = state.subtitles.speed || 1;
-  return mediaTime * speed + (state.subtitles.delay || 0) / 1000;
+  subClock.speed = state.subtitles.speed || 1;
+  subClock.delayMs = state.subtitles.delay || 0;
+  return computeSubTime(mediaTime, subClock);
+}
+
+/** 현재 표시 위치를 고정점으로 앵커 재설정 (배속 변경 전 호출) */
+function resyncSubClock(mediaTime = video.currentTime) {
+  subClock.speed = state.subtitles.speed || 1;
+  subClock.delayMs = state.subtitles.delay || 0;
+  Object.assign(subClock, reanchorSubClock(subClock, mediaTime));
+}
+
+/** 새 파일: 시계 원점 리셋 */
+function resetSubClock() {
+  subClock.anchorMedia = 0;
+  subClock.anchorSub = 0;
+  subClock.speed = state.subtitles.speed || 1;
+  subClock.delayMs = state.subtitles.delay || 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -596,6 +627,9 @@ async function loadItem(item, { autoplay = true, resume = false } = {}) {
 
   // 이전 위치 저장
   savePosition();
+
+  // 새 파일: 자막 시계 원점 리셋 (이전 파일 앵커 유출 방지)
+  resetSubClock();
 
   state.current = { path: resolved, name: baseName(resolved), url: null };
   setNowPlaying(baseName(resolved), '');
@@ -826,7 +860,12 @@ let continuousSnapshot = false;
 async function takeSnapshot({ silent = false } = {}) {
   if (!player.currentPath) return;
   try {
-    const shot = await player.captureFrame({ applyFilters: true });
+    const shot = await player.captureFrame({
+      applyFilters: true,
+      rotation: videoCtl.rotation,
+      flipH: videoCtl.flipH,
+      flipV: videoCtl.flipV,
+    });
     const dir = await api.snapshot.dir();
 
     const s = settings.get('snapshot');
@@ -1235,6 +1274,7 @@ const actions = {
     osd.show({ title: '자막 지연', body: `${next > 0 ? '+' : ''}${(next / 1000).toFixed(2)}s`, duration: 1000 });
   },
   subtitleSpeed: (delta) => {
+    resyncSubClock(); //旧 배속 기준 현재 위치를 앵커에 고정 후 변경
     const cur = state.subtitles.speed || 1;
     const next = clamp(Math.round((cur + delta) * 100) / 100, 0.5, 2);
     state.subtitles.speed = next;

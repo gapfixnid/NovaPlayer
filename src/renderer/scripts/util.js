@@ -325,6 +325,37 @@ export function setHidden(node, hidden) {
   else node.removeAttribute('hidden');
 }
 
+/**
+ * 자막 시계 (앵커 상대 모델).
+ *
+ * 절대시각에 배속을 곱하면(t*speed) 배속 변경 시 전체 싱크가 붕괴한다.
+ * 대신 앵커(미디어시각↔자막시각)를 두고 그 차이만 배속으로 스케일한다.
+ * 지연(delayMs)은 절대 오프셋으로 앵커 밖에 둬 지연 변경이 즉시 이동한다.
+ *
+ * clock = { anchorMedia, anchorSub, speed, delayMs }
+ */
+export function computeSubTime(t, clock) {
+  const c = clock ?? {};
+  const speed = c.speed || 1;
+  const d = (c.delayMs || 0) / 1000;
+  return (c.anchorSub ?? 0) + (t - (c.anchorMedia ?? 0)) * speed + d;
+}
+
+/**
+ * 새 앵커를 잡는다. 현재 표시 중인 자막 시각이 유지되도록
+ * 앵커 자막시각을 역산한다 (배속 변경·파일 로드 시 연속성 보장).
+ */
+export function reanchorSubClock(clock, mediaTime) {
+  const c = clock ?? {};
+  const d = (c.delayMs || 0) / 1000;
+  return {
+    anchorMedia: mediaTime,
+    anchorSub: computeSubTime(mediaTime, c) - d,
+    speed: c.speed || 1,
+    delayMs: c.delayMs || 0,
+  };
+}
+
 /** 간단한 상태 저장 (renderer 로컬) */
 export const localStore = {
   get(key, fallback) {

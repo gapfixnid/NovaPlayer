@@ -490,6 +490,50 @@ check('DEFAULT_HOTKEYS 전 키가 actions에 존재', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+console.log('\n[10] 자막 시계 (앵커 상대 모델)');
+
+check('기본 매핑 (1x, 지연 없음)', () => {
+  const t = util.computeSubTime(10, { anchorMedia: 0, anchorSub: 0, speed: 1, delayMs: 0 });
+  assert(t === 10, `got ${t}`);
+  return 't 그대로';
+});
+
+check('지연은 절대 오프셋', () => {
+  const t = util.computeSubTime(10, { anchorMedia: 0, anchorSub: 0, speed: 2, delayMs: 500 });
+  // (10-0)*2 + 0.5 = 20.5 — 지연은 배속 밖에 더해진다
+  assert(t === 20.5, `got ${t}`);
+  return '+0.5s 이동';
+});
+
+check('배속 변경 시 연속성 (핵심 회귀)', () => {
+  // 10초 지점에서 1x → 2x로 바꿔도 표시 시각이 뛰지 않아야 한다
+  const before = { anchorMedia: 0, anchorSub: 0, speed: 1, delayMs: 0 };
+  assert(util.computeSubTime(10, before) === 10, '변경 전 10s');
+  const after = util.reanchorSubClock(before, 10);
+  assert(after.anchorMedia === 10 && after.anchorSub === 10, `앵커 ${after.anchorMedia}/${after.anchorSub}`);
+  const clock2x = { ...after, speed: 2 };
+  assert(util.computeSubTime(10, clock2x) === 10, '변경 직후도 10s');
+  assert(util.computeSubTime(11, clock2x) === 12, '1초 뒤 12s (2x 진행)');
+  // 구방식(t*speed)은 10→20으로 뛰었을 것
+  return '점프 없음, 이후 2x 진행';
+});
+
+check('되감기·점프 후에도 선형 유지', () => {
+  const clock = { anchorMedia: 10, anchorSub: 10, speed: 2, delayMs: 0 };
+  assert(util.computeSubTime(0, clock) === -10, `0초 → ${util.computeSubTime(0, clock)}`);
+  assert(util.computeSubTime(100, clock) === 190, `100초 → ${util.computeSubTime(100, clock)}`);
+  return '앵커 기준 선형';
+});
+
+check('지연 변경은 즉시 이동 (앵커 유지)', () => {
+  const clock = { anchorMedia: 10, anchorSub: 10, speed: 1, delayMs: 0 };
+  const shifted = { ...clock, delayMs: 1000 };
+  assert(util.computeSubTime(15, clock) === 15, '변경 전');
+  assert(util.computeSubTime(15, shifted) === 16, '지연 +1s 즉시 반영');
+  return '+1s shift';
+});
+
+// ─────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(56)}`);
 console.log(`결과: 통과 ${pass} / 실패 ${fail}`);
 if (fail) {

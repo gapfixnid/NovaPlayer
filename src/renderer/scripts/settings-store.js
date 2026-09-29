@@ -51,6 +51,7 @@ export class SettingsStore extends Emitter {
     super();
     this.bridge = bridge;
     this.data = structuredClone(initial);
+    this._gen = 0; // 로컬 변경 세대: reset/refresh 경합 해소용
   }
 
   get(path, fallback) {
@@ -61,24 +62,30 @@ export class SettingsStore extends Emitter {
 
   /**
    * 로컬에 즉시 반영하고 main 에 저장을 요청한다.
-   * IPC 실패 시 다음 refresh() 때 main 값으로 되돌아간다.
+   * 저장 IPC는 1회 재시도 후에도 실패하면 'sync-error'를 emit한다.
    */
   set(pathOrPatch, value) {
+    this._gen += 1;
     if (isPlainObject(pathOrPatch) && value === undefined) {
       mergePatch(this.data, pathOrPatch);
       this.emit('change', this.data, pathOrPatch);
-      this.bridge.patch(pathOrPatch).catch((err) => {
-        console.warn('[settings] 저장 실패:', err?.message ?? err);
-      });
+      this._persist(() => this.bridge.patch(pathOrPatch), 'patch');
     } else {
       setPath(this.data, pathOrPatch, value);
       this.emit('change', this.data, { [pathOrPatch]: value });
       this.emit(`change:${pathOrPatch}`, value);
-      this.bridge.set(pathOrPatch, value).catch((err) => {
-        console.warn('[settings] 저장 실패:', err?.message ?? err);
-      });
+      this._persist(() => this.bridge.set(pathOrPatch, value), String(pathOrPatch));
     }
     return this.data;
+  }
+
+  /** 저장 IPC (1회 재시도, 최종 실패 시 이벤트) */
+  _persist(run, kind) {
+    run().catch(() => {
+      setTimeout(() => {
+        run().catch((err) => this.emit('sync-error', { kind, error: err }));
+      }, 400);
+    });
   }
 
   patch(obj) {
@@ -87,22 +94,26 @@ export class SettingsStore extends Emitter {
 
   /** main 기본값으로 복원 */
   async reset() {
-    const data = await this.bridge.reset();
-    if (data) {
-      this.data = data;
-      this.emit('change', this.data, null);
-      this.emit('reset', this.data);
-    }
-    return this.data;
+    return this._replace(() => this.bridge.reset(), 'reset');
   }
 
   /** main 에서 다시 읽어오기 (가져오기/외부 변경 후) */
   async refresh() {
-    const data = await this.bridge.get();
-    if (data) {
-      this.data = data;
-      this.emit('change', this.data, null);
-    }
+    return this._replace(() => this.bridge.get(), null);
+  }
+
+  /**
+   * 스냅샷 교체. 대기 중 로컬 변경이 끼면 main 최신값을 다시 읽어
+   * 수렴시킨다 (main은 IPC 도착순으로 적용하므로 최종 main 상태가 정답).
+   */
+  async _replace(fetcher, evt, attempts = 3) {
+    const gen = this._gen;
+    const data = await fetcher();
+    if (!data) return this.data;
+    if (gen !== this._gen && attempts > 1) return this._replace(fetcher, evt, attempts - 1);
+    this.data = data;
+    this.emit('change', this.data, null);
+    if (evt) this.emit(evt, this.data);
     return this.data;
   }
 

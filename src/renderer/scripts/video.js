@@ -265,6 +265,12 @@ class VideoController {
 
     const tick = () => {
       if (!this.deinterlaceActive) return;
+      // 일시정지 중에는 같은 프레임을 무한 재연산하지 않는다.
+      // VFC 모드에서는 새 프레임이 와야 콜백이 오므로 rAF 폴백만 스킵한다.
+      if (this.video.paused && !useVFC) {
+        this._rafId = requestAnimationFrame(tick);
+        return;
+      }
       this.renderDeinterlacedFrame();
       if (useVFC) this._vfcHandle = this.video.requestVideoFrameCallback(tick);
       else this._rafId = requestAnimationFrame(tick);
