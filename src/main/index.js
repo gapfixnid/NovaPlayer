@@ -514,8 +514,8 @@ function registerIpc() {
 
   // ── 셸 연동 ──
   ipcMain.on('shell:showItemInFolder', (_e, p) => { if (isSafePath(p)) shell.showItemInFolder(p); });
-  ipcMain.on('shell:openPath', async (_e, p) => { if (isSafePath(p)) return shell.openPath(p); return ''; });
-  ipcMain.on('shell:trash', async (_e, p) => { if (isSafePath(p)) return shell.trashItem(p); return false; });
+  ipcMain.handle('shell:openPath', async (_e, p) => { if (isSafePath(p)) return shell.openPath(p); return ''; });
+  ipcMain.handle('shell:trash', async (_e, p) => { if (isSafePath(p)) return shell.trashItem(p); return false; });
   ipcMain.on('shell:revealFolder', (_e, p) => { if (p) shell.openPath(p); });
 
   // ── 미디어 처리 ──
@@ -593,7 +593,7 @@ function registerIpc() {
     if (r.canceled) return [];
     const out = [];
     for (const f of r.filePaths) {
-      const items = ext(f) === '.pls' ? await lib.parsePls(f) : await lib.parseM3u(f);
+      const items = lib.ext(f) === '.pls' ? await lib.parsePls(f) : await lib.parseM3u(f);
       for (const p of items) if (fs.existsSync(p)) out.push(p);
     }
     return out;
@@ -750,7 +750,7 @@ function detectLangFromName(name) {
 async function expandSelection(filePaths) {
   const out = [];
   for (const p of filePaths) {
-    const e = ext(p);
+    const e = lib.ext(p);
     if (e === '.m3u' || e === '.m3u8') out.push(...await lib.parseM3u(p));
     else if (e === '.pls') out.push(...await lib.parsePls(p));
     else if (e === '.mkv' || e === '.mp4' || e === '.avi' || e === '.ts') {

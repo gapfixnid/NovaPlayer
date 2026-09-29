@@ -16,7 +16,7 @@ class HotkeyManager {
     this.api = api;
     this.actions = actions;
     this.lookup = new Map();     // 정규화된 accel → action 이름
-    this.pressed = new Set();
+    this.pressed = new Map();    // action 이름 → 마지막 입력 시각 (Set 아님 주의)
     this.enabled = true;
     this.rebuild();
   }

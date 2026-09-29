@@ -238,6 +238,8 @@ class SubtitleRenderer {
         const fill = el('span', { class: 'sub-karaoke-fill' });
         fill.style.color = '#ffd94a';
         fill.style.width = `${(p * 100).toFixed(2)}%`;
+        // 잘라 보일 본문을 복제해야 wipe 효과가 렌더된다
+        fill.append(document.createTextNode(seg.text));
         outer.append(fill);
         outer.style.color = baseColor;
       }

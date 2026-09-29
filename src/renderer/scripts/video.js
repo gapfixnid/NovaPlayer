@@ -90,7 +90,8 @@ class VideoController {
       { type: 'feFuncB', v: gamma },
     ];
     for (const fn of f.children) {
-      const spec = exps.find((e) => e.type === fn.getAttribute('type'));
+      // feFuncR/G/B 태그명으로 매칭 (type 속성은 'gamma'라서 비교 불가)
+      const spec = exps.find((e) => e.type === fn.tagName);
       if (spec) fn.setAttribute('exponent', spec.v.toFixed(3));
     }
   }

@@ -464,6 +464,32 @@ check('대용량 처리 (10,000 cue)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+console.log('\n[9] 단축키-액션 정합성 (회귀 가드)');
+
+check('DEFAULT_HOTKEYS 전 키가 actions에 존재', () => {
+  const settingsSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'settings.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(R, 'main.js'), 'utf8');
+
+  // DEFAULT_HOTKEYS 블록 안에서 2칸 들여쓰기 key: 수집
+  const hkStart = settingsSrc.indexOf('const DEFAULT_HOTKEYS = {');
+  const hkEnd = settingsSrc.indexOf('\n};', hkStart);
+  assert(hkStart >= 0 && hkEnd > hkStart, 'DEFAULT_HOTKEYS 블록 미발견');
+  const hkBlock = settingsSrc.slice(hkStart, hkEnd);
+  const hkKeys = [...hkBlock.matchAll(/^  ([A-Za-z0-9_]+):/gm)].map((m) => m[1]);
+  assert(hkKeys.length > 40, `단축키 ${hkKeys.length}개 (너무 적음)`);
+
+  // actions 리터럴 + Object.assign 별칭에서 2칸 들여쓰기 key: 수집
+  // (들여쓰기가 깊은 중첩 객체 프로퍼티와 구분)
+  const actionKeys = new Set(
+    [...mainSrc.matchAll(/^  ([A-Za-z0-9_]+):/gm)].map((m) => m[1]),
+  );
+
+  const missing = hkKeys.filter((k) => !actionKeys.has(k));
+  assert(missing.length === 0, `미구현 액션: ${missing.join(', ')}`);
+  return `${hkKeys.length}개 단축키 전부 매핑`;
+});
+
+// ─────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(56)}`);
 console.log(`결과: 통과 ${pass} / 실패 ${fail}`);
 if (fail) {

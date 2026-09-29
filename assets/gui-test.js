@@ -275,6 +275,24 @@ app.whenReady().then(async () => {
         check('해상도 인식', play.width === 1280 && play.height === 720, \`\${play.width}x\${play.height}\`);
         check('길이 인식', play.duration > 7, \`\${play.duration?.toFixed(2)}s\`);
         check('실제 재생 진행', play.playedOk === true, \`currentTime=\${play.currentTime?.toFixed(2)}s\`);
+
+        // ── 단축키 end-to-end: Space → 일시정지 → 재생 (HotkeyManager 실동작) ──
+        const hk = await wc.executeJavaScript(\`(async () => {
+          const v = document.querySelector('#video');
+          const press = (key) => window.dispatchEvent(
+            new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+          );
+          const before = v.paused;
+          press(' ');
+          await new Promise((r) => setTimeout(r, 400));
+          const midPaused = v.paused;
+          const midAria = document.querySelector('#btn-play').getAttribute('aria-label');
+          press(' ');
+          await new Promise((r) => setTimeout(r, 400));
+          return { before, midPaused, midAria, resumed: !v.paused };
+        })()\`).catch((e) => ({ error: e.message }));
+        check('단축키 일시정지(Space)', hk.midPaused === true, hk.error ?? \`paused=\${hk.midPaused}\`);
+        check('단축키 재생 재개(Space)', hk.resumed === true, hk.error ?? \`resumed=\${hk.resumed}\`);
       }
     } else {
       console.log('  SKIP 샘플 없음 (make-test-media.js 필요)');

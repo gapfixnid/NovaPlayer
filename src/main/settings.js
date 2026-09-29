@@ -70,7 +70,7 @@ const DEFAULT_HOTKEYS = {
   playlistToggle: ['Control+L'],
   infoPanel: ['I', 'F1'],
   settings: ['Control+P'],
-  osd: ['Control+O'],
+  osd: ['O'],
   sleepTimer: ['Control+Alt+K'],
   recentMenu: ['Shift+R'],
   playAndPause: ['Control+Space'],

@@ -1003,7 +1003,7 @@ let frameStepBusy = false;
 async function frameStep(direction) {
   if (!player.currentPath || frameStepBusy) return;
 
-  const first = !player.frameStep.active;
+  const first = !videoCtl.frameStep.active;
   if (first) player.pause();
 
   frameStepBusy = true;
@@ -1023,8 +1023,8 @@ async function frameStep(direction) {
       toastInfo(`약 ${(1 / fps * 1000).toFixed(0)}ms 단위로 이동합니다 (정확한 프레임 이동은 ffmpeg 가 필요합니다)`);
     } else {
       const fps = videoCtl.detectFps() || 25;
-      const frame = Math.round(player.frameStep.time * fps);
-      osd.show({ title: '프레임 이동', body: `${frame}프레임`, sub: `(${formatTime(player.frameStep.time, { ms: true, hours: true })})`, duration: 800 });
+      const frame = Math.round(videoCtl.frameStep.time * fps);
+      osd.show({ title: '프레임 이동', body: `${frame}프레임`, sub: `(${formatTime(videoCtl.frameStep.time, { ms: true, hours: true })})`, duration: 800 });
     }
   } finally {
     frameStepBusy = false;
@@ -1136,6 +1136,23 @@ const actions = {
     osd.info('영상 효과', '초기화');
     updateBadges();
   },
+  cycleColor: () => {
+    const presets = [
+      { name: '원본', v: { brightness: 0, contrast: 0, saturation: 0, hue: 0, gamma: 100 } },
+      { name: '선명', v: { brightness: 0, contrast: 20, saturation: 25, hue: 0, gamma: 100 } },
+      { name: '따뜻함', v: { brightness: 5, contrast: 5, saturation: 10, hue: -8, gamma: 100 } },
+      { name: '차가움', v: { brightness: 0, contrast: 5, saturation: 5, hue: 10, gamma: 100 } },
+      { name: '흑백', v: { brightness: 0, contrast: 10, saturation: -100, hue: 0, gamma: 100 } },
+    ];
+    const cur = settings.get('video');
+    const idx = presets.findIndex((p) => p.v.hue === cur.hue && p.v.saturation === cur.saturation
+      && p.v.contrast === cur.contrast && p.v.brightness === cur.brightness);
+    const next = presets[(idx + 1) % presets.length];
+    settings.patch({ video: next.v });
+    videoCtl.applyFilters(settings.get('video'));
+    osd.info('색상 보정', next.name);
+    updateBadges();
+  },
   cycleDeinterlace: () => {
     const order = ['auto', 'on', 'off'];
     const cur = settings.get('video.deinterlace');
@@ -1217,6 +1234,13 @@ const actions = {
     settings.set('subtitle.delay', next);
     osd.show({ title: '자막 지연', body: `${next > 0 ? '+' : ''}${(next / 1000).toFixed(2)}s`, duration: 1000 });
   },
+  subtitleSpeed: (delta) => {
+    const cur = state.subtitles.speed || 1;
+    const next = clamp(Math.round((cur + delta) * 100) / 100, 0.5, 2);
+    state.subtitles.speed = next;
+    settings.set('subtitle.speed', next);
+    osd.show({ title: '자막 속도', body: `${next.toFixed(2)}x`, duration: 1000 });
+  },
 
   // 스냅샷
   snapshot: () => takeSnapshot(),
@@ -1295,9 +1319,105 @@ const actions = {
 
   sleepTimer: () => openSleepTimer(),
 
+  // 상태 OSD (현재 파일·위치 한눈 표시)
+  showStatusOsd: () => {
+    const body = video.duration
+      ? `${formatTime(video.currentTime, { hours: true })} / ${formatTime(video.duration, { hours: true })}`
+      : '재생 중이 아님';
+    osd.show({ title: player.currentPath ? baseName(player.currentPath) : 'Nova Player', body, duration: 1500 });
+  },
+
+  // 최근 파일 메뉴 (화면 상단 중앙에 표시)
+  showRecentMenu: () => {
+    const items = (recentCache ?? []).slice(0, 10);
+    if (!items.length) { toastInfo('최근 재생 기록이 없습니다'); return; }
+    makeContextMenu(items.map((r) => ({
+      label: r.name ?? r.path,
+      onClick: () => actions.openPath(r.path),
+    }))).showAt(Math.max(8, window.innerWidth / 2 - 130), 60);
+  },
+
   // 단축키 도움말
   showHotkeyHelp: () => showHotkeyHelp(),
 };
+
+// ─────────────────────────────────────────────────────────────
+// 단축키 별칭 (DEFAULT_HOTKEYS 이름 → 실제 액션)
+// HotkeyManager와 메뉴는 단축키 이름으로 actions를 직접 호출하므로,
+// 이름이 다른 모든 단축키의 별칭을 여기에 둔다. 누락 시 해당 키가
+// 조용히 무시된다 (핸들된 것처럼 반환되지만 아무 일도 없음).
+// ─────────────────────────────────────────────────────────────
+Object.assign(actions, {
+  // 파일 이동
+  nextFile: () => playlist.next(),
+  prevFile: () => playlist.prev(),
+
+  // 탐색 (설정된 간격 사용, 고정 간격은 상수)
+  seekBack5: () => actions.seekBy(-(settings.get('playback.seekStepSmall') ?? 5)),
+  seekForward5: () => actions.seekBy(settings.get('playback.seekStepSmall') ?? 5),
+  seekBack30: () => actions.seekBy(-(settings.get('playback.seekStepMedium') ?? 30)),
+  seekForward30: () => actions.seekBy(settings.get('playback.seekStepMedium') ?? 30),
+  seekBack60: () => actions.seekBy(-(settings.get('playback.seekStepLarge') ?? 60)),
+  seekForward60: () => actions.seekBy(settings.get('playback.seekStepLarge') ?? 60),
+  seekBack10: () => actions.seekBy(-10),
+  seekForward10: () => actions.seekBy(10),
+  seekBack300: () => actions.seekBy(-300),
+  seekForward300: () => actions.seekBy(300),
+  relativeSeek1s: () => actions.seekBy(-1),
+  relativeSeekForward1s: () => actions.seekBy(1),
+
+  // 프레임 단위 이동 (메뉴바 A.frameStep/exitFrameStep 포함)
+  stepBackward: () => frameStep(-1),
+  stepForward: () => frameStep(1),
+  frameStep: (dir) => frameStep(dir ?? 1),
+  exitFrameStep: () => exitFrameStep(),
+
+  // 볼륨
+  volumeMute: () => toggleMute(),
+  volumeReset: () => {
+    settings.set('audio.volume', 0);
+    audio.setVolume(0);
+    controls.setVolume(0);
+    osd.volume(0, false);
+  },
+
+  // 화면
+  zoomNormal: () => actions.zoom('1:1'),
+  zoomFit: () => actions.zoom('fit'),
+  zoomAuto: () => actions.zoom('fit'),
+  zoomDouble: () => actions.zoom('2:1'),
+  rotateClockwise: () => actions.rotate(90),
+  rotateCounter: () => actions.rotate(-90),
+  flipHorizontal: () => actions.flipH(),
+  flipVertical: () => actions.flipV(),
+  alwaysOnTop: () => actions.toggleAlwaysOnTop(),
+
+  // 자막
+  subtitleToggle: () => actions.toggleSubtitle(),
+  subtitleDelayMinus: () => actions.subtitleDelay(-200),
+  subtitleDelayPlus: () => actions.subtitleDelay(200),
+  subtitleSpeedUp: () => actions.subtitleSpeed(0.1),
+  subtitleSpeedDown: () => actions.subtitleSpeed(-0.1),
+  subtitleNextLang: () => actions.cycleSubtitle(1),
+  subtitlePrevLang: () => actions.cycleSubtitle(-1),
+  aspectRatioNext: () => actions.cycleAspect(),
+  aspectRatioReset: () => actions.aspect('auto'),
+  colorCycle: () => actions.cycleColor(),
+
+  // 기능
+  snapshotContinuous: () => actions.toggleContinuousSnapshot(),
+  abLoop: () => actions.cycleAbPoint(),
+  abLoopClear: () => actions.clearAb(),
+  playlistToggle: () => actions.togglePlaylist(),
+  infoPanel: () => actions.playbackInfo(),
+  settings: () => actions.openSettings(),
+  osd: () => actions.showStatusOsd(),
+  recentMenu: () => actions.showRecentMenu(),
+  playAndPause: () => actions.playPause(),
+  fileOpen: () => actions.openFiles(),
+  close: () => actions.quit(),
+  seekBarFocus: () => document.querySelector('#seekbar')?.focus(),
+});
 
 /** 최근 목록 캐시 (메뉴 표시용) */
 let recentCache = [];
