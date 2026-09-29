@@ -4,7 +4,7 @@
  * 모든 항목은 저장 즉시(main 에 IPC) + 즉시 재생에 반영된다.
  * 선언적 스키마로 UI 를 생성해 설정 추가·수정이 한 곳에서 끝나도록 했다.
  */
-import { el, clamp, prettyKey, debounce, normalizeAccel, accelFromEvent } from '../util.js';
+import { el, clamp, prettyKey, normalizeAccel, accelFromEvent } from '../util.js';
 import { openModal } from './modal.js';
 import { toastOk, toastError, toastInfo } from './toast.js';
 import { EQ_PRESETS, EQ_PRESET_LABELS, HOTKEY_LABELS } from '../constants.js';
@@ -55,6 +55,7 @@ const SCHEMA = {
         { path: 'playback.loopOne', type: 'check', label: '현재 파일만 반복' },
         { path: 'playback.shufflePlaylist', type: 'check', label: '셔플 재생' },
         { path: 'playback.playAndExit', type: 'check', label: '재생 후 종료' },
+        { path: 'playlist.appendOnDrop', type: 'check', label: '드래그한 파일 이어서 추가', hint: '끄면 재생목록을 교체합니다. 폴더를 끌어다 놓으면 안의 미디어를 펼칩니다.' },
       ],
     },
     {
@@ -111,8 +112,7 @@ const SCHEMA = {
         { path: 'audio.muted', type: 'check', label: '음소거' },
         { path: 'audio.channelMode', type: 'select', label: '채널', options: [['auto', '자동'], ['stereo', '스테레오'], ['left', '왼쪽만'], ['right', '오른쪽만'], ['mono', '모노 합성']] },
         { path: 'audio.balance', type: 'range', label: '밸런스', min: -100, max: 100, step: 1 },
-        { path: 'audio.audioDelay', type: 'range', label: '음성 지연', min: -2000, max: 2000, step: 10, unit: 'ms' },
-        { path: 'audio.crossfade', type: 'range', label: '크로스페이드', min: 0, max: 10, step: 0.5, unit: '초', hint: '다음 파일 전환 시 겹쳐 재생합니다.' },
+        { path: 'audio.audioDelay', type: 'range', label: '음성 지연', min: 0, max: 2000, step: 10, unit: 'ms', hint: '음성을 영상보다 늦춥니다 (입모양 싱크 보정용)' },
       ],
     },
     {
@@ -201,7 +201,7 @@ const SCHEMA = {
       title: '자동 복구',
       desc: '직접 재생이 안 되면 순서대로 시도합니다.',
       rows: [
-        { path: 'ffmpeg.remuxFallback', type: 'check', label: '1단계: 컨테이너 재 mux', hint: '빠르고 무손실. 코넥터를 MKV 로 바꿔 재생해 봅니다.' },
+        { path: 'ffmpeg.remuxFallback', type: 'check', label: '1단계: 컨테이너 재 mux', hint: '빠르고 무손실. 컨테이너를 MKV 로 바꿔 재생해 봅니다.' },
         { path: 'ffmpeg.transcodeFallback', type: 'check', label: '2단계: 실시간 변환', hint: '느리지만 거의 모든 포맷을 살립니다.' },
         { path: 'ffmpeg.transcodeQuality', type: 'select', label: '변환 품질', options: [['fast', '빠름 (초고속)'], ['balanced', '균형'], ['quality', '높음 (매우 느림)']] },
       ],
@@ -302,7 +302,17 @@ export class SettingsPanel {
         el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '기본값 복원', onClick: () => this.#reset() }),
         el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '닫기', onClick: () => this.modal.close() }),
       ],
-      onClose: () => { this.panes.clear(); this.modal = null; },
+      onClose: () => {
+        // 대기 중인 단축키 캡처가 있으면 해제 (모달 닫힌 뒤 전역 가로챔 방지)
+        if (this._hkStops?.size) {
+          for (const stop of [...this._hkStops]) {
+            try { stop(); } catch { /* noop */ }
+          }
+          this._hkStops.clear();
+        }
+        this.panes.clear();
+        this.modal = null;
+      },
     });
 
     return this.modal;
@@ -624,12 +634,14 @@ export class SettingsPanel {
         captureBtn.classList.remove('capturing');
         captureBtn.textContent = '키 입력…';
         window.removeEventListener('keydown', onKeyDown, true);
+        this._hkStops?.delete(stop);
       };
 
       captureBtn.addEventListener('click', () => {
         captureBtn.classList.add('capturing');
         captureBtn.textContent = '키를 누르세요 (Esc 취소)';
         window.addEventListener('keydown', onKeyDown, true);
+        (this._hkStops ??= new Set()).add(stop);
       });
 
       renderSlots();

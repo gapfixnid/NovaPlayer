@@ -82,7 +82,7 @@ export class SettingsStore extends Emitter {
       this.emit('change', this.data, pathOrPatch);
       this._persist(() => this.bridge.patch(pathOrPatch), 'patch');
     } else {
-      setPath(this.data, pathOrPatch, value);
+      if (!setPath(this.data, pathOrPatch, value)) return this.data; // 차단된 키: 저장·이벤트 없이 무시
       this.emit('change', this.data, { [pathOrPatch]: value });
       this.emit(`change:${pathOrPatch}`, value);
       this._persist(() => this.bridge.set(pathOrPatch, value), String(pathOrPatch));

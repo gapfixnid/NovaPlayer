@@ -62,6 +62,10 @@ class HotkeyManager {
     if (tag === 'INPUT' && target.type === 'range' && e.key.startsWith('Arrow')) {
       return false;
     }
+    // 탐색바(div[role=slider])는 자체 키 핸들러가 있어 중복 탐색 방지
+    if (target?.closest?.('#seekbar')) {
+      return false;
+    }
     return true;
   }
 
@@ -75,10 +79,15 @@ class HotkeyManager {
     const action = this.lookup.get(accel);
     if (!action) return false;
 
-    // 오토리페이트 방지: 같은 조합이 2회 연속으로 들어오면 무시 (키 반복)
+    // 오토리페이트 방지: 같은 조합이 2회 연속으로 들어오면 무시 (키 반복).
+    // 그래도 기본 동작은 막는다 (매핑된 키가 스크롤 등 뒤동작을 일으키지 않게)
     const prev = e.timeStamp - (this.pressed.get(action) ?? -1e9);
     this.pressed.set(action, e.timeStamp);
-    if (prev < 60) return true;
+    if (prev < 60) {
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
+    }
 
     const fn = this.actions[action];
     if (typeof fn !== 'function') return true;

@@ -231,7 +231,8 @@ class SubtitleRenderer {
       outer.append(document.createTextNode(seg.text));
 
       // 이미 지나간 부분: 채워진 색
-      if (time >= seg.end) {
+      const done = time >= seg.end;
+      if (done) {
         outer.style.color = '#ffd94a';
       } else if (time > seg.start) {
         const p = (time - seg.start) / Math.max(0.001, seg.end - seg.start);
@@ -243,7 +244,8 @@ class SubtitleRenderer {
         outer.append(fill);
         outer.style.color = baseColor;
       }
-      if (seg.style?.color) outer.style.color = seg.style.color;
+      // 완료 하이라이트는 유지하고, 그 외에만 세그먼트 고유색 적용
+      if (!done && seg.style?.color) outer.style.color = seg.style.color;
       wrap.append(outer);
     }
     return wrap;

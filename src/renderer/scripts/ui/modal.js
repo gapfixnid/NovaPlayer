@@ -60,6 +60,7 @@ export function openModal({
   const close = (result) => {
     if (closed) return;
     closed = true;
+    if (bgHandler) root.removeEventListener('pointerdown', bgHandler);
     openCount = Math.max(0, openCount - 1);
     modal.remove();
     if (openCount === 0) {
@@ -84,11 +85,15 @@ export function openModal({
 
   closeBtn.addEventListener('click', () => close());
 
-  // 배경 클릭 시 닫기 (footer 없는 모달만)
+  // 배경 클릭 시 닫기. once가 아니라 명시 제거로 관리한다:
+  // once는 내부 클릭에도 소모되어 이후 배경 클릭이 영구 불발되고,
+  // 중첩 모달에서는 최상위만 닫혀야 한다.
+  let bgHandler = null;
   if (closable) {
-    root.addEventListener('pointerdown', (e) => {
-      if (e.target === root) close();
-    }, { once: true });
+    bgHandler = (e) => {
+      if (e.target === root && root.lastElementChild === modal) close();
+    };
+    root.addEventListener('pointerdown', bgHandler);
   }
 
   document.addEventListener('keydown', onKey, true);

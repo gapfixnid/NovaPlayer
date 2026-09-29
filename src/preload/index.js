@@ -69,6 +69,7 @@ const api = {
   // ── 미디어 ─────────────────────────────────────────────
   media: {
     toUrl: (p) => ipcRenderer.invoke('media:toUrl', p),
+    stat: (p) => ipcRenderer.invoke('media:stat', p),
     probe: (p) => ipcRenderer.invoke('media:probe', p),
     remux: (p) => ipcRenderer.invoke('media:remux', p),
     transcode: (p, opts) => ipcRenderer.invoke('media:transcode', p, opts),

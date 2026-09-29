@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const os = require('node:os');
 
-const { initPaths, pruneCache, logger, paths } = require('./paths');
+const { initPaths, pruneCache, listCacheFiles, logger, paths } = require('./paths');
 const { JsonStore } = require('./store');
 const { DEFAULT_SETTINGS } = require('./settings');
 const protocol = require('./protocol');
@@ -68,6 +68,19 @@ function sendToRenderer(channel, payload) {
     mainWindow.webContents.send(channel, payload);
   }
 }
+
+/** shell 실행/삭제 허용 확장자 (미디어 계열만) */
+const SHELL_OPEN_EXT = new Set([...lib.VIDEO_EXT, ...lib.AUDIO_EXT, ...lib.IMAGE_EXT, ...lib.SUBTITLE_EXT]);
+
+/** shell.openPath/trash 게이트: 경로 검증 + UNC 거부 + 미디어 계열만 */
+function isOpenablePath(p) {
+  if (!isSafePath(p)) return false;
+  if (p.startsWith('\\\\')) return false;
+  return SHELL_OPEN_EXT.has(path.extname(p).toLowerCase());
+}
+
+/** probe AbortController 보관 (발신자별 최신 1개, 좀비 방지) */
+const probeAbort = new Map();
 
 /** 네이티브(숨김) 메뉴 명령 처리 */
 function handleMenuCommand(command) {
@@ -169,8 +182,8 @@ function applyNetworkPolicy() {
   ses.webRequest.onBeforeRequest((details, callback) => {
     let scheme;
     try { scheme = new URL(details.url).protocol; } catch { scheme = ''; }
-    // file: 은 제외한다. 로컬 파일 접근은 nova-media:// allowlist 경로로만 허용하고,
-    // 렌더러의 file:// 직접 접근은 차단한다 (file:는 blocked 집합에 없어도 명시).
+    // file: 스킴은 허용 목록에 없으므로 아래에서 명시 차단한다.
+    // 로컬 파일 접근은 nova-media:// allowlist 경로로만 허용한다.
     const isLocal = details.url.startsWith('nova-media:') || details.url.startsWith('app:') || details.url.startsWith('devtools:') || details.url.startsWith('blob:') || details.url.startsWith('data:');
     if (blocked.has(scheme) && !isLocal) {
       logger.info(`외부 통신 차단: ${details.url.slice(0, 120)}`);
@@ -186,7 +199,10 @@ function applyNetworkPolicy() {
   // 세션에 있으면 세션 방식, 없으면 창별로 설정한다.
   if (typeof ses.setWindowOpenHandler === 'function') {
     ses.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith('https://')) shell.openExternal(url);
+      // 렌더러에서 여는 외부 URL은 전부 차단한다.
+      // (window.open 경유 데이터 유출 방지. 외부 열기가 필요하면
+      //  사용자가 브라우저에 직접 입력한다)
+      logger.info(`외부 창 열기 차단: ${String(url).slice(0, 120)}`);
       return { action: 'deny' };
     });
   }
@@ -290,8 +306,8 @@ function createWindow() {
   // session 중 하나에 있다. 있는 쪽을 찾아 쓰고, 어디에도 없으면
   // will-navigate 차단만으로 외부 이동을 막는다.
   const winOpenHandler = ({ url }) => {
-    // 사용자가 명시적으로 클릭한 외부 문서만 기본 브라우저로 연다
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    // 렌더러 window.open() 경유 외부 이동은 전면 거부한다 (유출 경로 차단)
+    logger.info(`외부 창 열기 차단: ${String(url).slice(0, 120)}`);
     return { action: 'deny' };
   };
   const targets = [mainWindow, mainWindow.webContents, mainWindow.webContents.session];
@@ -540,14 +556,35 @@ function registerIpc() {
   });
 
   // ── 셸 연동 ──
+  // openPath/trash는 실행·삭제로 이어지므로 미디어 계열 + UNC 거부로 제한한다.
+  // (calc.exe/.lnk/SMB 경로 실행 및 NTLM 유출 방지)
   ipcMain.on('shell:showItemInFolder', (_e, p) => { if (isSafePath(p)) shell.showItemInFolder(p); });
-  ipcMain.handle('shell:openPath', async (_e, p) => { if (isSafePath(p)) return shell.openPath(p); return ''; });
-  ipcMain.handle('shell:trash', async (_e, p) => { if (isSafePath(p)) return shell.trashItem(p); return false; });
-  ipcMain.on('shell:revealFolder', (_e, p) => { if (isSafePath(p)) shell.openPath(p); });
+  ipcMain.handle('shell:openPath', async (_e, p) => { if (isOpenablePath(p)) return shell.openPath(p); return ''; });
+  ipcMain.handle('shell:trash', async (_e, p) => { if (isOpenablePath(p)) return shell.trashItem(p); return false; });
+  // reveal은 폴더 '표시'이지 실행이 아니다 (openPath 오용 수정)
+  ipcMain.on('shell:revealFolder', (_e, p) => { if (isSafePath(p)) shell.showItemInFolder(p); });
 
   // ── 미디어 처리 ──
   ipcMain.handle('media:toUrl', (_e, p) => (isSafePath(p) ? protocol.toMediaUrl(p) : null));
-  ipcMain.handle('media:probe', (_e, p) => (isSafePath(p) ? ffmpeg.probe(p) : null));
+  ipcMain.handle('media:stat', async (_e, p) => {
+    if (!isSafePath(p)) return null;
+    try {
+      const st = await fsp.stat(p);
+      return { isFile: st.isFile(), isDirectory: st.isDirectory(), size: st.isFile() ? st.size : 0 };
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle('media:probe', (e, p) => {
+    if (!isSafePath(p)) return null;
+    // 이전 probe가 아직 돌고 있으면 중단 (고속 다음파일 넘기기 시 좀비 누적 방지)
+    try { probeAbort.get(e.sender.id)?.abort(); } catch { /* noop */ }
+    const controller = new AbortController();
+    probeAbort.set(e.sender.id, controller);
+    return ffmpeg.probe(p, { signal: controller.signal }).finally(() => {
+      if (probeAbort.get(e.sender.id) === controller) probeAbort.delete(e.sender.id);
+    });
+  });
   ipcMain.handle('media:remux', (_e, p) => (isSafePath(p) && settings.get('ffmpeg.remuxFallback') ? ffmpeg.remux(p) : null));
   ipcMain.handle('media:transcode', (e, p, opts) => {
     if (!isSafePath(p) || !settings.get('ffmpeg.transcodeFallback')) return null;
@@ -556,9 +593,16 @@ function registerIpc() {
     const quality = num(o.quality, 0, 0, 2);
     const audioBitrate = /^\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
       ? o.audioBitrate : '192k';
+    // 완료/실패 후 리스너를 제거해야 취소 리스너가 발신자에 쌓이지 않는다
     const controller = new AbortController();
-    e.sender.once('media:transcodeCancel', () => controller.abort());
-    return ffmpeg.transcode(p, { ...o, width, quality, audioBitrate, signal: controller.signal });
+    const onCancel = () => controller.abort();
+    e.sender.once('media:transcodeCancel', onCancel);
+    const done = () => {
+      try { e.sender.removeListener('media:transcodeCancel', onCancel); } catch { /* noop */ }
+    };
+    // transcode()가 동기 null을 반환해도 되도록 Promise로 감싼다
+    return Promise.resolve(ffmpeg.transcode(p, { ...o, width, quality, audioBitrate, signal: controller.signal }))
+      .finally(done);
   });
   ipcMain.handle('media:frame', (_e, p, t, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForFrameStep')) return null;
@@ -772,16 +816,36 @@ function registerIpc() {
     }
   });
   ipcMain.handle('diag:cacheSize', async () => {
-    let total = 0;
-    let count = 0;
-    try {
-      for (const name of await fsp.readdir(paths.cache)) {
-        try { const st = await fsp.stat(path.join(paths.cache, name)); if (st.isFile()) { total += st.size; count++; } } catch { /* noop */ }
-      }
-    } catch { /* noop */ }
-    return { totalMB: Math.round(total / 1048576), count };
+    const files = listCacheFiles();
+    const total = files.reduce((s, f) => s + f.size, 0);
+    return { totalMB: Math.round(total / 1048576), count: files.length };
   });
-  ipcMain.handle('diag:openPath', (_e, p) => { if (isSafePath(p)) return shell.openPath(p); return ''; });
+  ipcMain.handle('diag:openPath', (_e, p) => {
+    // 설정/로그/스냅샷/미디어 폴더 + 시스템 미디어 라이브러리만 연다.
+    // 임의 실행 파일 경로로의 openPath 남용을 막는다.
+    if (!isSafePath(p)) return '';
+    const lower = (s) => s.toLowerCase();
+    const rp = path.resolve(p);
+    const roots = [
+      paths.userData,
+      paths.logs,
+      paths.cache,
+      lib.resolveSnapshotDir(settings.get('snapshot.folder')),
+      path.join(app.getPath('videos'), 'Nova Player'),
+      app.getPath('videos'),
+      app.getPath('pictures'),
+      app.getPath('music'),
+      app.getPath('documents'),
+    ].map((d) => { try { return lower(path.resolve(d)) + path.sep; } catch { return ''; } })
+      .filter(Boolean);
+    const target = lower(rp);
+    const ok = roots.some((r) => target === r.slice(0, -1) || target.startsWith(r));
+    if (!ok) {
+      logger.warn(`diag:openPath 거부: ${p.slice(0, 120)}`);
+      return '';
+    }
+    return shell.openPath(p);
+  });
   ipcMain.handle('diag:systemInfo', () => ({
     os: `${os.type()} ${os.release()} (${process.arch})`,
     cpus: os.cpus().length,
@@ -844,7 +908,7 @@ async function expandSelection(filePaths) {
     if (e === '.m3u' || e === '.m3u8') out.push(...await lib.parseM3u(p));
     else if (e === '.pls') out.push(...await lib.parsePls(p));
     else if (e === '.mkv' || e === '.mp4' || e === '.avi' || e === '.ts') {
-      // 컨테이너 내장 파일은 렌더러가 ffprobe 로 추출
+      // 일반 미디어 컨테이너는 그대로 재생 목록에 추가
       out.push(p);
     } else out.push(p);
   }

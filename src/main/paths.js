@@ -31,19 +31,9 @@ function pruneCache(maxMB) {
   const mb = Number(maxMB);
   const safeMB = Number.isFinite(mb) && mb > 0 ? mb : 2048;
   const limit = safeMB * 1024 * 1024;
-  let entries;
-  try { entries = fs.readdirSync(paths.cache); } catch { return 0; }
-  const files = [];
-  let total = 0;
-  for (const name of entries) {
-    const full = path.join(paths.cache, name);
-    try {
-      const stat = fs.statSync(full);
-      if (!stat.isFile()) continue;
-      files.push({ full, mtime: stat.mtimeMs, size: stat.size });
-      total += stat.size;
-    } catch { /* noop */ }
-  }
+  // tmp/ 하위(변환·썸네일 산출물)까지 합산해야 용량 제한이 실효된다
+  const files = listCacheFiles();
+  let total = files.reduce((s, f) => s + f.size, 0);
   if (total <= limit) return 0;
   files.sort((a, b) => a.mtime - b.mtime);
   let removed = 0;
@@ -52,6 +42,30 @@ function pruneCache(maxMB) {
     try { fs.unlinkSync(f.full); total -= f.size; removed += 1; } catch { /* noop */ }
   }
   return removed;
+}
+
+/** 캐시 전체(최상위 + 하위 1단계) 파일 목록 */
+function listCacheFiles() {
+  const files = [];
+  const scanDir = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const name of entries) {
+      const full = path.join(dir, name);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isFile()) files.push({ full, mtime: stat.mtimeMs, size: stat.size });
+      } catch { /* noop */ }
+    }
+  };
+  scanDir(paths.cache);
+  try {
+    for (const name of fs.readdirSync(paths.cache)) {
+      const full = path.join(paths.cache, name);
+      try { if (fs.statSync(full).isDirectory() && !name.startsWith('.')) scanDir(full); } catch { /* noop */ }
+    }
+  } catch { /* noop */ }
+  return files;
 }
 
 /** 임시 작업 디렉토리 (프레임 추출 등) */
@@ -108,4 +122,4 @@ const logger = {
   setLevel(l) { logLevel = LEVELS[l] ?? logLevel; },
 };
 
-module.exports = { paths, initPaths, pruneCache, tempDir, logger, os };
+module.exports = { paths, initPaths, pruneCache, listCacheFiles, tempDir, logger, os };

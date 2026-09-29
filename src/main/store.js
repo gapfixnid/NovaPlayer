@@ -61,7 +61,12 @@ class JsonStore {
       ) {
         this._merge(target[key], val);
       } else if (val !== undefined && (typeof val === typeof target[key] || target[key] === null)) {
-        target[key] = val;
+        // 배열↔일반객체 혼동 차단 (둘 다 typeof object라 별도 검사 필요)
+        if (target[key] !== null && Array.isArray(val) !== Array.isArray(target[key])) {
+          global.novaLog?.warn(`타입 불일치로 무시됨: ${key}`);
+        } else {
+          target[key] = val;
+        }
       } else if (val !== undefined) {
         global.novaLog?.warn(`타입 불일치로 무시됨: ${key}`);
       }
@@ -77,22 +82,22 @@ class JsonStore {
   }
 
   set(keyOrPatch, value) {
-    if (typeof keyOrPatch === 'object' && keyOrPatch !== null) {
-      this._merge(this.data, keyOrPatch);
-    } else {
+    if (typeof keyOrPatch !== 'object' || keyOrPatch === null) {
+      // 문자열 경로도 객체 패치로 변환해 동일한 화이트리스트·타입 검증을 탄다
+      // (직접 대입 시 스키마 외 키가 영속되는 우회 방지)
       const keys = String(keyOrPatch).split('.');
       if (keys.some(isPoisonKey)) {
         global.novaLog?.warn(`차단된 설정 키: ${keyOrPatch}`);
         return this.data;
       }
       const last = keys.pop();
-      let node = this.data;
-      for (const k of keys) {
-        if (typeof node[k] !== 'object' || node[k] === null) node[k] = {};
-        node = node[k];
-      }
+      const patch = {};
+      let node = patch;
+      for (const k of keys) node = node[k] = {};
       node[last] = value;
+      keyOrPatch = patch;
     }
+    this._merge(this.data, keyOrPatch);
     this.scheduleSave();
     return this.data;
   }

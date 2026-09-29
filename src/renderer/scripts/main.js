@@ -5,7 +5,7 @@
  * 실제 동작은 각 모듈( player / audio / video / subtitles / ui/* )에 있고,
  * 여기서는 모듈 간 이벤트와 설정을 연결한다.
  */
-import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden, computeSubTime, reanchorSubClock } from './util.js';
+import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden, computeSubTime, reanchorSubClock, buildSnapshotName } from './util.js';
 import state from './state.js';
 import { Player } from './player.js';
 import { audio } from './audio.js';
@@ -20,9 +20,8 @@ import { MenuBar } from './ui/menubar.js';
 import { showFileInfo, showPlaybackInfo } from './ui/infobar.js';
 import { openModal, anyModalOpen } from './ui/modal.js';
 import { HotkeyManager } from './hotkeys.js';
-import { toast, toastOk, toastInfo, toastWarn, toastError } from './ui/toast.js';
+import { toastOk, toastInfo, toastWarn, toastError } from './ui/toast.js';
 import { HOTKEY_LABELS } from './constants.js';
-import { buildSnapshotName } from './util.js';
 import { SettingsStore } from './settings-store.js';
 
 const api = window.nova;
@@ -111,6 +110,10 @@ async function boot() {
   bindStage();
   bindLifecycle();
 
+  // 부팅 시 전체 설정 1회 적용 (볼륨/음소거/속도/자막/영상 초기값 반영)
+  // buildUi 이후여야 controls/playlist가 존재한다
+  applyAllSettings(settings.get());
+
   await playlist.load();
 
   document.body.classList.remove('booting');
@@ -148,14 +151,13 @@ async function boot() {
 // UI 구성
 // ─────────────────────────────────────────────────────────────
 function buildUi() {
-  // HotkeyManager 가 actions 를 참조하므로 가장 먼저 구성한다.
-  // (actions 는 아래 const 로 선언되지만, 이 시점에는 이미 초기화되어 있다)
   // 모든 모듈에는 동기 설정 스토어가 포함된 래핑 api(app)를 넘긴다.
+  // actions/HotkeyManager는 모듈 평가 시점에 이미 초기화된 const를 참조한다.
   hotkeys = new HotkeyManager({ api: app, actions });
   applyHotkeys();
 
-  controls = new Controls({ player, api: app, video, onAction: handleControlAction });
-  playlist = new PlaylistManager({ api: app, onPlay: (item) => loadItem(item, { autoplay: true, resume: true }) });
+  controls = new Controls({ player, api: app, video, audio, onAction: handleControlAction });
+  playlist = new PlaylistManager({ api: app, player, onPlay: (item) => loadItem(item, { autoplay: true, resume: true }) });
   settingsPanel = new SettingsPanel({
     api: app,
     appVersion,
@@ -217,6 +219,10 @@ function applyAllSettings(s) {
   audio.setVolume(s.audio.volume);
   audio.setMuted(s.audio.muted);
   audio.apply(s.audio);
+  if (typeof controls !== 'undefined' && controls) {
+    controls.setVolume(s.audio.volume);
+    controls.setMuted(s.audio.muted);
+  }
 
   // 자막
   subRenderer.setSettings(s.subtitle);
@@ -257,7 +263,7 @@ function onSettingChanged(path, value) {
     updateBadges();
   }
   if (path.startsWith('subtitle.')) {
-    // 배속 변경은 state 갱신 전에旧 배속으로 앵커를 고정해야 싱크가 유지된다
+    // 배속 변경은 state 갱신 전에 구 배속으로 앵커를 고정해야 싱크가 유지된다
     if (path === 'subtitle.speed') resyncSubClock();
     subRenderer.setSettings(s.subtitle);
     subRenderer.setReadingMode(s.subtitle.readingMode);
@@ -327,9 +333,26 @@ function bindWindow() {
     }
     if (!paths.length) return;
 
-    const media = paths.filter((p) => /\.(mp4|mkv|webm|avi|mov|ts|mp3|flac|wav|m4a|flv|wmv|m4v|m2ts|3gp|ogv|m4a|opus)$/i.test(p));
-    const subs = paths.filter((p) => /\.(srt|vtt|ass|ssa|sub|smi)$/i.test(p));
-    const others = paths.filter((p) => !media.includes(p) && !subs.includes(p));
+    // 폴더는 내용물(미디어)을 펼쳐서 추가한다. 디렉터리 자체를
+    // 재생 항목으로 등록하지 않는다 (좀비 항목·복구 체인 오작동 방지).
+    // main/library.js MEDIA_EXT(비디오+오디오)와 동일 집합.
+    const MEDIA_RE = /\.(mp4|m4v|mkv|webm|avi|mov|qt|wmv|asf|flv|f4v|mpg|mpeg|mpe|m2v|mpv|m2ts|mts|ts|vob|3gp|3g2|rm|rmvb|ogv|divx|dv|nsv|fli|flc|mxf|roq|y4m|mp3|m4a|aac|flac|wav|wma|ogg|oga|opus|ape|alac|mka|ac3|dts|amr|mid|midi|spx|tta|dsf|dff)$/i;
+    const SUB_RE = /\.(srt|vtt|ass|ssa|sub|smi|sup|idx|lrc)$/i;
+    const files = [];
+    for (const p of paths) {
+      const st = await api.media.stat(p).catch(() => null);
+      if (st?.isDirectory) {
+        const inside = await api.media.listDirectory(p, { recursive: true }).catch(() => []);
+        files.push(...inside);
+      } else {
+        files.push(p);
+      }
+    }
+    if (!files.length) return;
+
+    const media = files.filter((p) => MEDIA_RE.test(p));
+    const subs = files.filter((p) => SUB_RE.test(p));
+    const others = files.filter((p) => !media.includes(p) && !subs.includes(p));
 
     if (media.length) await openPaths(media, { replace: !settings.get('playlist.appendOnDrop') });
     for (const sub of subs) await loadSubtitleFile(sub);
@@ -417,7 +440,11 @@ function bindLifecycle() {
 
 function savePosition() {
   if (!player.currentPath) return;
-  api.position.save(player.currentPath, video.currentTime, video.duration);
+  if (settings.get('playback.rememberPositionPerFile') === false) return;
+  try {
+    const r = api.position.save(player.currentPath, video.currentTime, video.duration);
+    r?.catch?.(() => {});
+  } catch { /* 종료 중 IPC 단절 무시 */ }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -512,7 +539,10 @@ function bindPlayer() {
       videoCtl.setDeinterlace(settings.get('video.deinterlace'), e.detail);
     }
     state.hasAudio = !!e.detail.audio;
-    playlist.setDurationFor(player.currentPath, e.detail.duration);
+    const infoSize = e.detail.size ?? 0;
+    playlist.setDurationFor(player.currentPath, e.detail.duration, infoSize);
+    // 탐색바 썸네일 프리뷰 준비 (미리 생성해 두면 호버가 끊기지 않음)
+    controls.requestStrip?.();
     updateBadges();
   });
 
@@ -544,6 +574,12 @@ function bindPlayer() {
   });
 
   player.addEventListener('ended', () => onEnded());
+
+  player.addEventListener('sleep', (e) => {
+    if (!e.detail?.expired) return;
+    toastOk('취침 타이머: 재생을 멈췄습니다');
+    osd.show({ title: '취침 타이머', body: '종료', duration: 2000 });
+  });
 
   player.addEventListener('error', (e) => {
     console.warn('[player]', e.detail);
@@ -621,12 +657,16 @@ async function loadItem(item, { autoplay = true, resume = false } = {}) {
   const resolved = await api.recent.resolve(item.path);
   if (!resolved) {
     toastError('파일을 찾을 수 없습니다 (이동되었거나 삭제됨)');
-    playlist.removeIndices([playlist.currentIndex]);
+    // currentIndex가 -1이면 제거할 게 없다 (좀비 인덱스 방지)
+    if (playlist.currentIndex >= 0) playlist.removeIndices([playlist.currentIndex]);
     return;
   }
 
   // 이전 위치 저장
   savePosition();
+
+  // 새 파일: ReplayGain 측정 상태 리셋 (이전 트랙 샘플 오염 방지)
+  audio.reset();
 
   // 새 파일: 자막 시계 원점 리셋 (이전 파일 앵커 유출 방지)
   resetSubClock();
@@ -667,8 +707,14 @@ function onEnded() {
     player.play();
     return;
   }
+  if (settings.get('playback.autoPlayNext') === false) {
+    osd.show({ title: '재생 끝', body: '자동 재생이 꺼져 있습니다', duration: 1800 });
+    if (settings.get('playback.playAndExit')) actions.quit();
+    return;
+  }
   const delay = (settings.get('playback.autoPlayNextDelay') ?? 0) * 1000;
   const goNext = () => {
+    endTimer = null;
     const idx = playlist.nextIndex(1, { manual: false });
     if (idx < 0) {
       osd.show({ title: '재생 끝', body: '마지막 파일입니다', duration: 1800 });
@@ -677,9 +723,11 @@ function onEnded() {
     }
     playlist.playAt(idx);
   };
-  if (delay > 0) setTimeout(goNext, delay);
+  if (endTimer) clearTimeout(endTimer);
+  if (delay > 0) endTimer = setTimeout(goNext, delay);
   else goNext();
 }
+let endTimer = null;
 
 // ─────────────────────────────────────────────────────────────
 // 복구(변환) 오버레이
@@ -750,7 +798,9 @@ function resetRecoveryUi() {
 
   const cancel = $('#recovery-cancel');
   cancel.textContent = '취소';
-  cancel.onclick = cancelTranscode;
+  // 클릭 분기는 하단 addEventListener 하나로 처리한다 (이중 실행 방지).
+  // 여기서 onclick을 덮어쓰면 리스너와 둘 다 발사된다.
+  cancel.onclick = null;
 }
 
 async function cancelTranscode() {
@@ -966,16 +1016,22 @@ function resetSleepTimerOnPlay() {
 // ─────────────────────────────────────────────────────────────
 function changeVolume(delta) {
   const s = settings.get('audio');
-  let v = clamp((s.volume ?? 80) + delta, 0, 100);
+  const v = clamp((s.volume ?? 80) + delta, 0, 100);
   settings.set('audio.volume', v);
-  if (v > 0 && s.muted) {
-    settings.set('audio.muted', false);
-    controls.setMuted(false);
+  if (v > 0) {
+    if (s.muted) {
+      settings.set('audio.muted', false);
+      controls.setMuted(false);
+    }
+    audio.setVolume(v);
+    audio.setMuted(false);
+  } else {
+    // 0까지 내렸다고 음소거 플래그를 건드리지 않는다 (설정과 엔진 일치 유지)
+    audio.setVolume(0);
+    audio.setMuted(s.muted);
   }
-  audio.setVolume(v);
-  audio.setMuted(false);
   controls.setVolume(v);
-  osd.volume(v, false);
+  osd.volume(v, v === 0 ? s.muted : false);
 }
 
 function toggleMute() {
@@ -1025,8 +1081,9 @@ function handleControlAction(action, arg) {
     case 'subtitleMenu': A.openSubtitle(); break;
     case 'fileInfo': A.fileInfo(); break;
     case 'togglePlaylist': A.togglePlaylist(); break;
+    case 'toggleMute': A.toggleMute(); break;
     case 'fullscreen': A.fullscreen(); break;
-    case 'volumeChanged': audio.setVolume(arg); break;
+    case 'volumeChanged': settings.set('audio.volume', arg); audio.setVolume(arg); break;
     case 'setSpeed': A.setSpeed(arg); break;
     case 'applyPreservePitch': player.setSpeed(video.playbackRate); break;
     case 'durationChanged': break;
@@ -1132,7 +1189,8 @@ const actions = {
 
   // 화면
   fullscreen: toggleFullscreen,
-  windowedFullscreen: () => api.window.fullscreen(),
+  // 창 전체화면 = 네이티브 전체화면이 아닌 보더리스 최대화 (UI 유지)
+  windowedFullscreen: () => api.window.maximize(),
   zoom: (mode) => {
     settings.set('video.zoomMode', mode);
     videoCtl.setZoomMode(mode, settings.get('video.zoomCustom'));
@@ -1254,8 +1312,13 @@ const actions = {
   openSubtitle: async () => {
     const files = await api.dialog.openSubtitle();
     if (files.length) {
-      if (!state.subtitles.list.length) {
-        state.subtitles.list = files.map((p) => ({ path: p, name: baseName(p), label: '외부' }));
+      // 기존 목록에 없는 것만 추가해야 다음/이전 자막 순환에 잡힌다
+      const known = new Set((state.subtitles.list ?? []).map((s) => s.path));
+      for (const p of files) {
+        if (!known.has(p)) {
+          state.subtitles.list.push({ path: p, name: baseName(p), label: '외부' });
+          known.add(p);
+        }
       }
       await loadSubtitleFile(files[0]);
     }
@@ -1274,7 +1337,7 @@ const actions = {
     osd.show({ title: '자막 지연', body: `${next > 0 ? '+' : ''}${(next / 1000).toFixed(2)}s`, duration: 1000 });
   },
   subtitleSpeed: (delta) => {
-    resyncSubClock(); //旧 배속 기준 현재 위치를 앵커에 고정 후 변경
+    resyncSubClock(); // 구 배속 기준 현재 위치를 앵커에 고정 후 변경
     const cur = state.subtitles.speed || 1;
     const next = clamp(Math.round((cur + delta) * 100) / 100, 0.5, 2);
     state.subtitles.speed = next;
@@ -1461,10 +1524,18 @@ Object.assign(actions, {
 
 /** 최근 목록 캐시 (메뉴 표시용) */
 let recentCache = [];
-setInterval(async () => {
-  recentCache = await api.recent.list(12);
-}, 8000);
+let recentCacheTimer = null;
+function armRecentCache() {
+  if (recentCacheTimer) clearInterval(recentCacheTimer);
+  recentCacheTimer = setInterval(async () => {
+    recentCache = await api.recent.list(12);
+  }, 8000);
+}
+armRecentCache();
 api.recent.list(12).then((r) => { recentCache = r ?? []; });
+window.addEventListener('beforeunload', () => {
+  if (recentCacheTimer) clearInterval(recentCacheTimer);
+});
 
 function dirOf(p) {
   const s = String(p).replace(/[\\/]+$/, '');

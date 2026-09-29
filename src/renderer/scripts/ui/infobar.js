@@ -143,7 +143,7 @@ export function showPlaybackInfo({ video, player, videoCtl, audioEngine, playlis
       ['버퍼 상태', v.readyState >= 4 ? '충분' : v.readyState === 3 ? '부족' : '데이터 대기'],
       ['네트워크 상태', v.networkState === 2 ? '로딩 중' : v.networkState === 1 ? '활성' : '대기'],
       ['복구 단계', ({ none: '없음 (네이티브)', native: '네이티브', remux: '재 mux', transcode: '변환' })[player.fallbackStage] ?? player.fallbackStage],
-      ['재생 모드', videoCtl.frameStep.active ? `정지 (프레임 ${Math.round(videoCtl.frameStep.time * (player.frameRate || 25))})` : '정상'],
+      ['재생 모드', videoCtl.frameStep.active ? `정지 (프레임 ${Math.round(videoCtl.frameStep.time * (videoCtl.detectFps() || 25))})` : '정상'],
     ];
 
     if (q) {

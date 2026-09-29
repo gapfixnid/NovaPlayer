@@ -115,6 +115,8 @@ class VideoController {
   computeDisplaySize() {
     const sw = this.stage.clientWidth;
     const sh = this.stage.clientHeight;
+    // 스테이지가 아직 배치 전(0)이면 마지막 크기를 유지해 1px 플래시를 막는다
+    if ((sw < 2 || sh < 2) && this.lastSize) return this.lastSize;
     const vw = this.video.videoWidth || sw;
     const vh = this.video.videoHeight || sh;
 
@@ -153,7 +155,8 @@ class VideoController {
 
   applyLayout() {
     const size = this.computeDisplaySize();
-    const rot = ((this.rotation % 360) + 360) % 360;
+    // 크기 계산에 쓴 총회전(meta+사용자)과 transform을 일치시킨다
+    const rot = ((size.totalRotation % 360) + 360) % 360;
 
     let transform = '';
     if (rot) transform += ` rotate(${rot}deg)`;

@@ -204,7 +204,10 @@ const DEFAULT_SETTINGS = {
     sort: 'none',              // none | name | size | date
     sortAsc: true,
     doubleClickAction: 'play', // play | enqueue | external
+    appendOnDrop: false,       // 드래그한 파일을 목록에 이어서 추가 (끄면 교체)
   },
+
+  alwaysOnTop: false,
 
   snapshot: {
     folder: '',                // 비우면 Pictures/Nova Player

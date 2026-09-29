@@ -10,7 +10,7 @@
  *  - 심볼릭 링크를 realpath 로 해석해 앱 리소스 디렉터리 밖 접근을 거부
  *  - 렌더러에는 Content-Security-Policy 헤더를 함께 내려보냄
  */
-const { protocol, net } = require('electron');
+const { protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { Readable } = require('node:stream');
@@ -183,6 +183,9 @@ function registerHandlers() {
             'content-range': `bytes ${start}-${end}/${total}`,
             'accept-ranges': 'bytes',
             'cache-control': 'no-store',
+            // video[crossorigin] + canvas(getImageData/toBlob) taint 방지.
+            // 자격증명 없는 익명 요청이라 와일드카드로 충분하다.
+            'access-control-allow-origin': '*',
           },
         });
       }
@@ -198,6 +201,7 @@ function registerHandlers() {
         'content-length': String(total),
         'accept-ranges': 'bytes',
         'cache-control': 'no-store',
+        'access-control-allow-origin': '*',
       },
     });
   });

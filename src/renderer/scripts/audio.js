@@ -73,7 +73,7 @@ class AudioEngine {
       this.nodes.eqIn = source;
       this.nodes.eqOut = this.eqBands.at(-1);
 
-      // ── 베이스 / 래빗 / 트레블 ──
+      // ── 베이스 / 보컬 / 트레블 ──
       const bassShelf = ctx.createBiquadFilter();
       bassShelf.type = 'lowshelf';
       bassShelf.frequency.value = 100;
@@ -188,7 +188,12 @@ class AudioEngine {
       // ── ReplayGain + 볼륨 ──
       const gain = ctx.createGain();
       gain.gain.value = 0;
-      outMerger.connect(gain);
+      // ── 음성 지연 (입모양 싱크 보정, 최대 2초) ──
+      const delayNode = ctx.createDelay(2.0);
+      delayNode.delayTime.value = 0;
+      outMerger.connect(delayNode);
+      delayNode.connect(gain);
+      this.nodes.delayNode = delayNode;
       gain.connect(ctx.destination);
       this.nodes.gain = gain;
 
@@ -273,6 +278,12 @@ class AudioEngine {
 
     // 밸런스
     ramp(this.nodes.panner.pan, clamp((settings.balance ?? 0) / 100, -1, 1));
+
+    // 음성 지연 (음수·비수치는 0으로, 상한 2초)
+    if (this.nodes.delayNode) {
+      const ms = Number(settings.audioDelay ?? 0);
+      ramp(this.nodes.delayNode.delayTime, Number.isFinite(ms) ? clamp(ms, 0, 2000) / 1000 : 0);
+    }
 
     // 채널 모드
     this.applyChannelMode(settings.channelMode ?? 'auto');

@@ -1,14 +1,15 @@
 /**
  * 하단 컨트롤 바 + 탐색바
  */
-import { $, clamp, formatTime, formatSpeed, throttle, debounce, setHidden } from '../util.js';
+import { $, clamp, formatTime, formatSpeed, debounce, setHidden } from '../util.js';
 import { osd } from './osd.js';
 
 class Controls {
-  constructor({ player, api, video, onAction }) {
+  constructor({ player, api, video, audio, onAction }) {
     this.player = player;
     this.api = api;
     this.video = video;
+    this.audio = audio ?? null;
     this.onAction = onAction;
 
     this.seekbar = $('#seekbar');
@@ -56,6 +57,7 @@ class Controls {
     $('#btn-info').addEventListener('click', () => this.onAction('fileInfo'));
     $('#btn-playlist').addEventListener('click', () => this.onAction('togglePlaylist'));
     $('#btn-fullscreen').addEventListener('click', () => this.onAction('fullscreen'));
+    $('#btn-mute').addEventListener('click', () => this.onAction('toggleMute'));
   }
 
   // ─────────────────────────────────────────────────────────
@@ -268,14 +270,17 @@ class Controls {
 
     p.addEventListener('time', (e) => {
       if (this.scrubbing) return;
+      this._lastTime = e.detail;
       this.timeCurrent.textContent = formatTime(e.detail, { hours: true });
       this.setPlayed(p.duration ? e.detail / p.duration : 0);
+      this._paintTotal();
       this._updateAria();
     });
 
     p.addEventListener('duration', (e) => {
       const d = e.detail;
-      this.timeTotal.textContent = Number.isFinite(d) ? formatTime(d, { hours: true }) : '00:00:00';
+      this._duration = d;
+      this._paintTotal();
       this.seekbar.setAttribute('aria-valuemax', String(Math.round(d || 0)));
       this.onAction('durationChanged', d);
     });
@@ -299,7 +304,11 @@ class Controls {
     });
 
     p.addEventListener('rate', (e) => this.setSpeed(e.detail));
-    p.addEventListener('volume', () => this.setVolume(p.video.volume * 100));
+    // DSP 활성 시 video.volume=1 고정이 volumechange를 쏘므로 무시 (슬라이더 점프 방지)
+    p.addEventListener('volume', () => {
+      if (this.audio?.ready) return;
+      this.setVolume(p.video.volume * 100);
+    });
     p.addEventListener('seeked', (e) => {
       this.timeCurrent.textContent = formatTime(e.detail, { hours: true });
     });
@@ -310,6 +319,21 @@ class Controls {
   setPlayed(ratio) {
     const pct = clamp(ratio, 0, 1) * 100;
     this.seekPlayed.style.width = `${pct}%`;
+  }
+
+  /** 전체 시간 표시 (남은 시간 모드 지원) */
+  _paintTotal() {
+    const d = this._duration;
+    if (!Number.isFinite(d)) {
+      this.timeTotal.textContent = '00:00:00';
+      return;
+    }
+    if (this.api.settings.get('ui.seekbarShowRemaining')) {
+      const remain = Math.max(0, d - (this._lastTime ?? 0));
+      this.timeTotal.textContent = `-${formatTime(remain, { hours: true })}`;
+    } else {
+      this.timeTotal.textContent = formatTime(d, { hours: true });
+    }
   }
 
   _updateAria() {

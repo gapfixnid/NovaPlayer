@@ -123,7 +123,7 @@ class Library extends JsonStore {
     const p = Number(position);
     const d = Number(duration);
     if (!Number.isFinite(p) || p < 0) return;
-    const key = filePath.toLowerCase();
+    const key = posKey(filePath);
     this.data.playbackPositions[key] = {
       p: Math.floor(p),
       d: Number.isFinite(d) && d >= 0 ? Math.floor(d) : 0,
@@ -134,16 +134,26 @@ class Library extends JsonStore {
 
   getPosition(filePath) {
     if (!filePath) return null;
-    return this.data.playbackPositions[key(filePath)] ?? null;
+    // 구버전 소문자 키 호환 폴백
+    return this.data.playbackPositions[posKey(filePath)]
+      ?? this.data.playbackPositions[key(filePath)]
+      ?? null;
   }
 
   clearPosition(filePath) {
+    delete this.data.playbackPositions[posKey(filePath)];
     delete this.data.playbackPositions[key(filePath)];
     this.scheduleSave();
   }
 }
 
 function key(p) { return String(p).toLowerCase(); }
+
+/** 재생위치 키: Windows는 대소문자 미구분이라 소문자화, POSIX는 원문 유지 */
+function posKey(p) {
+  const s = String(p);
+  return process.platform === 'win32' ? s.toLowerCase() : s;
+}
 
 // ─────────────────────────────────────────────────────────────
 // M3U / PLS 파서
@@ -164,15 +174,18 @@ async function parseM3u(filePath) {
   return out;
 }
 
-/** PLS(INI 형태) 파싱 */
+/** PLS(INI 형태) 파싱 — M3U와 동일하게 상대경로를 기준 폴더에서 해결 */
 async function parsePls(filePath) {
   const text = await readTextSmart(filePath);
+  const base = path.dirname(filePath);
   const files = [];
   const re = /^File\d+\s*=\s*(.+)$/gim;
   let m;
   while ((m = re.exec(text)) !== null) {
     const v = m[1].trim();
-    if (v && isMediaFile(v)) files.push(v);
+    if (!v) continue;
+    const resolved = path.isAbsolute(v) ? v : path.resolve(base, v);
+    if (isMediaFile(resolved)) files.push(resolved);
   }
   return files;
 }
@@ -223,8 +236,9 @@ function decodeSmart(buf) {
   // UTF-8 유효성 검사
   if (isValidUtf8(buf)) return new TextDecoder('utf-8').decode(buf);
 
-  // 한국어 자막 대다수 = CP949/EUC-KR
-  for (const enc of ['euc-kr', 'shift-jis', 'gb18030', 'big5', 'windows-1252']) {
+  // 한국어 자막 대다수 = CP949/EUC-KR. 후보 상수를 그대로 순회한다
+  for (const enc of ENCODING_CANDIDATES) {
+    if (enc === 'utf-8' || enc === 'iso-8859-1') continue;
     try {
       const text = new TextDecoder(enc, { fatal: false }).decode(buf);
       const bad = (text.match(/\ufffd/g) ?? []).length;

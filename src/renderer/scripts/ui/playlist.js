@@ -4,20 +4,22 @@
  * 지원: 다중 선택, 드래그 재정렬, 필터, 정렬, 셔플, 반복 모드,
  *       M3U/PLS 임포트·익스포트, 자동 저장, 총 재생시간.
  */
-import { el, formatTime, baseName, stripExt, extName, debounce } from '../util.js';
+import { el, formatTime, baseName, extName, debounce } from '../util.js';
 import { toastOk, toastInfo, toastError } from './toast.js';
 
 const AUDIO_EXT = new Set(['.mp3', '.m4a', '.aac', '.flac', '.wav', '.wma', '.ogg', '.oga', '.opus', '.ape', '.alac', '.mka', '.ac3', '.dts', '.amr', '.mid', '.midi', '.spx', '.tta', '.dsf', '.dff']);
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif', '.avif']);
 
 export class PlaylistManager {
-  constructor({ api, onPlay }) {
+  constructor({ api, player, onPlay }) {
     this.api = api;
+    this.player = player ?? null;
     this.onPlay = onPlay;
     this.items = [];
     this.currentIndex = -1;
     this.selection = new Set();
     this.filter = '';
+    this.shuffleMode = false;
     this.shuffleOrder = [];      // 셔플 시 재생을 위한 인덱스 큐
     this.repeatMode = 'off';    // off | all | one
     this.history = [];           // 셔플 재생 이력 (되감기용)
@@ -41,11 +43,14 @@ export class PlaylistManager {
   add(paths, { dedupe = true } = {}) {
     const existing = new Set(this.items.map((i) => i.path.toLowerCase()));
     const added = [];
+    const base = Date.now();
+    let n = 0;
     for (const p of [].concat(paths)) {
       const key = String(p).toLowerCase();
       if (dedupe && existing.has(key)) continue;
       existing.add(key);
-      this.items.push({ path: p, name: baseName(p), duration: 0, addedAt: Date.now() });
+      // addedAt 단조 증가 (date 정렬이 ms 동점이 되지 않게)
+      this.items.push({ path: p, name: baseName(p), duration: 0, size: 0, addedAt: base + (n++) });
       added.push(this.items.length - 1);
     }
     this.afterChange();
@@ -54,8 +59,9 @@ export class PlaylistManager {
 
   /** 목록을 비우고 지정 항목으로 교체 (파일 열기 시) */
   replace(paths) {
-    this.items = [].concat(paths).map((p) => ({
-      path: p, name: baseName(p), duration: 0, addedAt: Date.now(),
+    const base = Date.now();
+    this.items = [].concat(paths).map((p, i) => ({
+      path: p, name: baseName(p), duration: 0, size: 0, addedAt: base + i,
     }));
     this.selection.clear();
     this.currentIndex = -1;
@@ -120,13 +126,20 @@ export class PlaylistManager {
     this.afterChange();
   }
 
-  setDurationFor(path, duration) {
+  setDurationFor(path, duration, size) {
     const item = this.items.find((i) => i.path === path);
-    if (item && item.duration !== duration) {
-      item.duration = duration;
-      this.renderList();
-      this.persist();
-    }
+    if (!item) return;
+    let changed = false;
+    if (item.duration !== duration) { item.duration = duration; changed = true; }
+    if (size !== undefined && item.size !== size) { item.size = size; changed = true; }
+    if (!changed) return;
+    // 전체 재렌더 대신 해당 행만 갱신 (대용량 목록 메타 폭풍 방지)
+    const idx = this.items.indexOf(item);
+    const row = this.listNode.querySelector(`.pl-item[data-index="${idx}"] .pl-dur`);
+    if (row) row.textContent = item.duration ? formatTime(item.duration) : '--:--';
+    else this.renderList();
+    this.updateCounts();
+    this.persist();
   }
 
   // ─────────────────────────────────────────────────────────
@@ -186,8 +199,9 @@ export class PlaylistManager {
 
   next() { const i = this.nextIndex(1); if (i >= 0) this.playAt(i); }
   prev() {
-    // 재생 3초 이내면 이전 파일, 아니면 현재 파일 처음으로
-    if (this.api.currentTime > 3) { this.api.seekTo(0); return; }
+    // 재생 3초 초과면 현재 파일 처음으로, 아니면 이전 파일
+    const t = this.player?.video?.currentTime ?? 0;
+    if (t > 3) { this.player?.seekTo(0); return; }
     const i = this.nextIndex(-1);
     if (i >= 0) this.playAt(i);
   }
@@ -201,6 +215,7 @@ export class PlaylistManager {
     document.getElementById('pl-shuffle').setAttribute('aria-pressed', String(this.shuffleMode));
     if (this.shuffleMode) this._buildShuffleOrder();
     else this.shuffleOrder = [];
+    this.api.settings.set('playback.shufflePlaylist', this.shuffleMode);
     toastInfo(this.shuffleMode ? '셔플 켜짐' : '셔플 꺼짐');
     this.persist();
   }
@@ -244,20 +259,41 @@ export class PlaylistManager {
     this.shuffleOrder = [];
     this.api.settings.set('playlist.sort', kind);
     this.afterChange();
+    this._paintSortButton();
     toastOk(`${({ name: '이름', size: '크기', date: '추가순', type: '형식' })[kind]}으로 정렬`);
   }
 
   cycleSort() {
     const order = ['none', 'name', 'date', 'type'];
-    const btn = document.getElementById('pl-sort');
     const current = this.api.settings.get('playlist.sort') ?? 'none';
     const next = order[(order.indexOf(current) + 1) % order.length];
-    btn.textContent = { none: '정렬', name: '이름↑', date: '추가순', type: '형식' }[next];
     if (next === 'none') {
       this.api.settings.set('playlist.sort', 'none');
       this.afterChange();
+      this._paintSortButton();
       toastInfo('정렬 해제');
     } else this.sortBy(next);
+  }
+
+  /** 정렬 버튼 라벨에 종류+방향 표시 (우클릭으로 오름/내림 전환) */
+  _paintSortButton() {
+    const btn = document.getElementById('pl-sort');
+    if (!btn) return;
+    const kind = this.api.settings.get('playlist.sort') ?? 'none';
+    const asc = this.api.settings.get('playlist.sortAsc') !== false;
+    const arrow = asc ? '↑' : '↓';
+    btn.textContent = { none: '정렬', name: `이름${arrow}`, date: `추가순${arrow}`, type: `형식${arrow}` }[kind] ?? '정렬';
+    btn.title = '왼쪽 클릭: 기준 변경 / 오른쪽 클릭: 오름·내림 전환';
+  }
+
+  toggleSortDirection() {
+    const asc = this.api.settings.get('playlist.sortAsc') !== false;
+    this.api.settings.set('playlist.sortAsc', !asc);
+    const kind = this.api.settings.get('playlist.sort') ?? 'none';
+    if (kind === 'none') { this._paintSortButton(); return; }
+    this.sortBy(kind);
+    this._paintSortButton();
+    toastInfo(asc ? '내림차순 정렬' : '오름차순 정렬');
   }
 
   // ─────────────────────────────────────────────────────────
@@ -375,7 +411,23 @@ export class PlaylistManager {
     list.addEventListener('dblclick', (e) => {
       const li = e.target.closest('.pl-item');
       if (!li) return;
-      this.playAt(Number(li.dataset.index));
+      const index = Number(li.dataset.index);
+      const mode = this.api.settings.get('playlist.doubleClickAction') ?? 'play';
+      if (mode === 'external') {
+        const item = this.items[index];
+        if (item) this.api.shell.openPath(item.path);
+        return;
+      }
+      if (mode === 'enqueue' && index !== this.currentIndex) {
+        // 현재 항목 다음으로 끼워넣고 선택만 이동
+        const [item] = this.items.splice(index, 1);
+        const at = this.currentIndex >= 0 ? this.currentIndex + 1 : this.items.length;
+        this.items.splice(Math.min(at, this.items.length), 0, item);
+        this.afterChange();
+        toastInfo(`다음에 재생: ${item.name}`);
+        return;
+      }
+      this.playAt(index);
     });
 
     // ── 드래그 재정렬 ──
@@ -424,7 +476,7 @@ export class PlaylistManager {
       list.querySelectorAll('.dragging').forEach((n) => n.classList.remove('dragging'));
     });
 
-    this.filterInput.addEventListener('input', (e) => this.setFilter(e.target.value));
+    this.filterInput.addEventListener('input', debounce((e) => this.setFilter(e.target.value), 150));
   }
 
   _bindTools() {
@@ -438,8 +490,9 @@ export class PlaylistManager {
 
     document.getElementById('pl-remove').addEventListener('click', () => {
       if (!this.selection.size) return toastInfo('제거할 항목을 선택하세요');
+      const n = this.selection.size;
       this.removeIndices([...this.selection]);
-      toastOk(`${this.selection.size ? '선택 항목을' : ''} 제거했습니다`);
+      toastOk(`${n}개 항목을 제거했습니다`);
     });
 
     document.getElementById('pl-clear').addEventListener('click', () => {
@@ -451,6 +504,10 @@ export class PlaylistManager {
     document.getElementById('pl-shuffle').addEventListener('click', () => this.toggleShuffle());
     document.getElementById('pl-repeat').addEventListener('click', () => this.cycleRepeat());
     document.getElementById('pl-sort').addEventListener('click', () => this.cycleSort());
+    document.getElementById('pl-sort').addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.toggleSortDirection();
+    });
 
     document.getElementById('pl-import').addEventListener('click', async () => {
       try {
@@ -495,8 +552,11 @@ export class PlaylistManager {
 
   async _persist() {
     if (!this.api.settings.get('playlist.autoSave')) return;
-    await this.api.playlist.librarySave(this.items);
-    await this.api.playlist.save(this.items);
+    // 자동 저장은 최근 N개만 유지 (목록 자체는 그대로)
+    const limit = this.api.settings.get('playlist.autoSaveLimit') ?? 200;
+    const snapshot = Number.isFinite(limit) && limit > 0 ? this.items.slice(-Math.floor(limit)) : this.items;
+    await this.api.playlist.librarySave(snapshot);
+    await this.api.playlist.save(snapshot);
   }
 
   async load() {
@@ -513,9 +573,13 @@ export class PlaylistManager {
       this.api.settings.set('playlist.sort', 'none');
       this.sortBy(sort);
     }
+    this._paintSortButton();
     const repeat = this.api.settings.get('playback.loopPlaylist');
     if (repeat) this.cycleRepeat();
+    if (this.api.settings.get('playback.shufflePlaylist')) {
+      this.shuffleMode = true;
+      document.getElementById('pl-shuffle')?.setAttribute('aria-pressed', 'true');
+      this._buildShuffleOrder();
+    }
   }
 }
-
-export { stripExt };

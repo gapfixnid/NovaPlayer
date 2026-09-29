@@ -102,6 +102,11 @@ class Player extends EventTarget {
     this.currentPath = filePath;
     this.fallbackStage = 'native';
     this.abLoop = { a: null, b: null };
+    // 이전 파일 메타 초기화 (probe 실패 시 옛 정보가 파일정보 모달 등에 잔류 방지)
+    this.info = null;
+    this.frameRate = 0;
+    this.fallbackSource = null;
+    if (this._smoothRaf) { cancelAnimationFrame(this._smoothRaf); this._smoothRaf = null; }
     this.video.dataset.novaPath = filePath;
 
     // 위치 기억
@@ -259,8 +264,25 @@ class Player extends EventTarget {
   seekTo(time, { smooth = false } = {}) {
     if (!Number.isFinite(this.video.duration)) return;
     const target = clamp(time, 0, Math.max(0, this.video.duration - 0.05));
-    if (smooth) this.video.currentTime = target;
-    else this.video.currentTime = target;
+    if (!smooth || Math.abs(target - this.video.currentTime) < 0.5) {
+      this.video.currentTime = target;
+      return;
+    }
+    // 스무스 탐색: 150ms 동안 6단계로 나눠 이동 (끊김 없는 프리뷰용)
+    if (this._smoothRaf) cancelAnimationFrame(this._smoothRaf);
+    const from = this.video.currentTime;
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / 150);
+      try { this.video.currentTime = from + (target - from) * k; } catch { /* noop */ }
+      if (k < 1 && this._smoothTarget === target) {
+        this._smoothRaf = requestAnimationFrame(step);
+      } else {
+        this._smoothRaf = null;
+      }
+    };
+    this._smoothTarget = target;
+    this._smoothRaf = requestAnimationFrame(step);
   }
 
   seekBy(delta) {
@@ -321,10 +343,15 @@ class Player extends EventTarget {
       this._emit('abloop', { from: this.abLoop.a, to: this.abLoop.b });
     }
 
-    // 위치 저장 (5초마다)
+    // 위치 저장 (5초마다, 파일별 기억이 꺼져 있으면 스킵)
     if (this.currentPath && Date.now() - this.lastSaveAt > 5000) {
       this.lastSaveAt = Date.now();
-      this.api.position.save(this.currentPath, t, this.video.duration);
+      if (this.api.settings.get('playback.rememberPositionPerFile') !== false) {
+        try {
+          const r = this.api.position.save(this.currentPath, t, this.video.duration);
+          r?.catch?.(() => {});
+        } catch { /* IPC 단절 무시 */ }
+      }
     }
 
     this._emit('time', t);

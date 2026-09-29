@@ -1,7 +1,7 @@
 /**
  * 상단 메뉴바 + 드롭다운 메뉴 정의
  */
-import { el, prettyKey, makeContextMenu, ICONS } from '../util.js';
+import { el, prettyKey, ICONS } from '../util.js';
 
 export class MenuBar {
   constructor({ actions, api }) {

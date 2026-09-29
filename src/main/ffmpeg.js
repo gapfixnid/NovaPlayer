@@ -74,7 +74,6 @@ function resolveBinaries(customFfmpeg = '', customFfprobe = '') {
   // ffprobe 가 없으면 ffmpeg 옆에 붙은 ffprobe 를 시도
   if (!ffprobePath && ffmpegPath) {
     const dir = path.dirname(ffmpegPath);
-    const stem = path.basename(ffmpegPath).replace(/ffmpeg(\.exe)?$/i, '');
     ffprobePath = firstExisting([
       path.join(dir, `ffprobe${exe}`),
       path.join(dir, 'bin', `ffprobe${exe}`),
@@ -270,9 +269,9 @@ function hashKey(...parts) {
  */
 async function remux(filePath, { signal } = {}) {
   if (!ffmpegPath) return null;
-  const ext = (path.extname(filePath) || '.mkv').toLowerCase();
-  const out = path.join(tempDir(), `remux_${hashKey(filePath, fs.statSync(filePath).mtimeMs, 'r')}.mkv`);
   try {
+    const st = fs.statSync(filePath);
+    const out = path.join(tempDir(), `remux_${hashKey(filePath, st.mtimeMs, st.size, 'r')}.mkv`);
     const { code, stderr } = await run(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', filePath,
@@ -288,6 +287,7 @@ async function remux(filePath, { signal } = {}) {
     logger.info(`remux 성공: ${path.basename(filePath)} → ${path.basename(out)}`);
     return out;
   } catch (err) {
+    // statSync 실패(삭제 경합 포함)도 transcode 폴백으로 이어지도록 null 반환
     logger.warn(`remux 오류: ${err.message}`);
     return null;
   }
@@ -311,7 +311,14 @@ async function transcode(filePath, opts = {}) {
       ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '22', '-pix_fmt', 'yuv420p']
       : ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p'];
 
-  const out = path.join(tempDir(), `tc_${hashKey(filePath, quality, width)}.mp4`);
+  // 원본 변경(mtime/size) 시 캐시 키가 달라져 옛 결과가 재사용되지 않는다
+  let fingerprint = '0-0';
+  try {
+    const st = fs.statSync(filePath);
+    fingerprint = `${st.mtimeMs}-${st.size}`;
+  } catch { /* 삭제된 파일은 후속 단계에서 실패 처리 */ }
+
+  const out = path.join(tempDir(), `tc_${hashKey(filePath, quality, width, audioBitrate, fingerprint)}.mp4`);
   if (fs.existsSync(out) && fs.statSync(out).size > 0) {
     logger.info(`트랜스코딩 캐시 재사용: ${path.basename(out)}`);
     return { path: out, cached: true };
@@ -365,7 +372,9 @@ async function transcode(filePath, opts = {}) {
 /** 특정 시각의 프레임을 JPEG 로 추출 (프레임 단위 이동, 썸네일 공용) */
 async function extractFrame(filePath, timeSec, { width = 480, quality = 4 } = {}) {
   if (!ffmpegPath || !Number.isFinite(timeSec)) return null;
-  const out = path.join(tempDir(), `frame_${hashKey(filePath, timeSec.toFixed(3), width)}.jpg`);
+  let fingerprint = '0';
+  try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
+  const out = path.join(tempDir(), `frame_${hashKey(filePath, timeSec.toFixed(3), width, quality, fingerprint)}.jpg`);
   if (fs.existsSync(out) && fs.statSync(out).size > 0) return out;
   try {
     const { code } = await run(ffmpegPath, [
@@ -396,7 +405,19 @@ async function thumbnailStrip(filePath, count = 12, opts = {}) {
 
   const { tileW = 160, tileH = 90, cols = 6 } = opts;
   const rows = Math.ceil(count / cols);
-  const out = path.join(tempDir(), `strip_${hashKey(filePath, count, tileW)}.jpg`);
+  // 총픽셀 상한 (~8MP): 타일 폭탄 방지. 초과 시 타일 크기를 축소한다.
+  const MAX_SPRITE_PX = 8 * 1024 * 1024;
+  let tw = tileW;
+  let th = tileH;
+  const spritePx = tw * cols * th * rows;
+  if (spritePx > MAX_SPRITE_PX) {
+    const k = Math.sqrt(MAX_SPRITE_PX / spritePx);
+    tw = Math.max(16, Math.floor(tw * k));
+    th = Math.max(16, Math.floor(th * k));
+  }
+  let fingerprint = '0';
+  try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
+  const out = path.join(tempDir(), `strip_${hashKey(filePath, count, tw, th, cols, fingerprint)}.jpg`);
   if (fs.existsSync(out) && fs.statSync(out).size > 0) return { file: out, cols, rows, count, duration };
 
   // 0.5% ~ 99.5% 구간에 균등 배치 (앞/뒤 검은 화면 회피)
@@ -407,7 +428,7 @@ async function thumbnailStrip(filePath, count = 12, opts = {}) {
     const { code, stderr } = await run(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', filePath,
-      '-vf', `fps=${count}/(duration*${spanPct}),scale=${tileW}:${tileH},tile=${cols}x${rows}`,
+      '-vf', `fps=${count}/(duration*${spanPct}),scale=${tw}:${th},tile=${cols}x${rows}`,
       '-frames:v', '1',
       '-q:v', '5',
       '-f', 'image2',
