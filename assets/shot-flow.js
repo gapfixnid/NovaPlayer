@@ -42,6 +42,42 @@ const FLOWS = {
     const toasts = [...document.querySelectorAll('.toast')].map((t) => t.textContent);
     return JSON.stringify({ modal: !!modal, modalText: (modal?.textContent || '').slice(0, 120), toasts });
   })()`,
+  // 재생 아이콘 전환 + 재생목록 열림 상태의 비디오 레이아웃 측정
+  playstate: `(async () => {
+    const api = window.nova;
+    const out = {};
+    const url = await api.media.toUrl(SAMPLE).catch((e) => 'ERR:' + e.message);
+    out.urlOk = typeof url === 'string' && url.length > 0;
+    const v = document.querySelector('#video');
+    const btn = document.querySelector('#btn-play');
+    v.muted = true;
+    if (out.urlOk) {
+      v.src = url;
+      document.querySelector('#dropzone').hidden = true;
+      await new Promise((resolve) => {
+        const t = setTimeout(() => resolve(), 15000);
+        v.addEventListener('loadedmetadata', () => { clearTimeout(t); resolve(); }, { once: true });
+        v.load();
+      });
+      try { await v.play(); } catch (e) { out.playErr = e.name; }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    const cs = (s) => getComputedStyle(document.querySelector(s)).display;
+    out.paused = v.paused;
+    out.currentTime = +v.currentTime.toFixed(2);
+    out.aria = btn.getAttribute('aria-label');
+    out.icoPlayDisplay = cs('#btn-play .ico-play');
+    out.icoPauseDisplay = cs('#btn-play .ico-pause');
+    const rect = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; };
+    out.stageBefore = rect('#stage');
+    out.videoBefore = rect('#video');
+    document.querySelector('#btn-playlist').click();
+    await new Promise((r) => setTimeout(r, 600));
+    out.playlistHidden = document.querySelector('#playlist-panel').hidden;
+    out.stageAfter = rect('#stage');
+    out.videoAfter = rect('#video');
+    return JSON.stringify(out);
+  })()`,
   // 전체화면 진입 후 캡처 (영상전용 UI 검증)
   fullscreen: `(async () => {
     await window.nova.window.fullscreen();
@@ -54,9 +90,14 @@ const FLOWS = {
   })()`,
 };
 
+const sampleAbs = path.join(root, 'assets', 'testmedia', '01-baseline-h264-aac.mp4');
+// playstate 흐름 안의 SAMPLE 토큰을 실제 경로 문자열로 치환한다.
+// (FLOW_SRC 는 렌더러 컨텍스트에서 실행되므로 하네스 변수를 참조할 수 없음)
+const flowSrc = (FLOWS[flow] ?? FLOWS.about).replace(/SAMPLE/g, JSON.stringify(sampleAbs));
+
 const HARNESS = `const ROOT = ${JSON.stringify(root)};
 const OUT = ${JSON.stringify(out)};
-const FLOW_SRC = ${JSON.stringify(FLOWS[flow] ?? FLOWS.about)};
+const FLOW_SRC = ${JSON.stringify(flowSrc)};
 const FLOW = ${JSON.stringify(flow)};
 const { app, BrowserWindow } = require('electron');
 require(ROOT + '/src/main/index.js');

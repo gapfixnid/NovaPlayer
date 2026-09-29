@@ -101,6 +101,8 @@ body.no-mouse .stage { cursor: none; }
   place-items: center;
   transform-origin: center center;
   will-change: transform;
+  /* 명시적 w/h 지정 시에도 스테이지 중앙에 오도록 (left/top 앵커 방지) */
+  margin: auto;
 }
 
 #video {
@@ -300,13 +302,8 @@ body.is-dragging .dropzone-inner::after {
 }
 .stage-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
-/* ─────────── 전체화면 ─────────── */
+/* ─────────── 전체화면: 영상만 표시 ─────────── */
 body.is-fullscreen .workspace { height: 100vh; }
-body.is-fullscreen .controls {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 50;
-  background: linear-gradient(to top, rgb(0 0 0 / .82), rgb(0 0 0 / .55));
-  border-top-color: transparent;
-}
-body.is-fullscreen .controls { --controls-h: 74px; }
+/* 하단 컨트롤바 자체를 숨긴다 (마우스 이동에도 나타나지 않음).
+   조작은 키보드(F / Enter / Esc / Space / 방향키)와 더블클릭으로 한다. */
+body.is-fullscreen .controls { display: none; }

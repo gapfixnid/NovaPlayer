@@ -1,7 +1,7 @@
 /**
  * 하단 컨트롤 바 + 탐색바
  */
-import { $, clamp, formatTime, formatSpeed, throttle, debounce } from '../util.js';
+import { $, clamp, formatTime, formatSpeed, throttle, debounce, setHidden } from '../util.js';
 import { osd } from './osd.js';
 
 class Controls {
@@ -196,8 +196,8 @@ class Controls {
 
   setMuted(m) {
     document.body.classList.toggle('is-muted', m);
-    $('#btn-mute .ico-vol').hidden = m;
-    $('#btn-mute .ico-mute').hidden = !m;
+    setHidden($('#btn-mute .ico-vol'), m);
+    setHidden($('#btn-mute .ico-mute'), !m);
   }
 
   // ─────────────────────────────────────────────────────────
@@ -286,15 +286,15 @@ class Controls {
     });
 
     p.addEventListener('play', () => {
-      this.btnPlay.querySelector('.ico-play').hidden = true;
-      this.btnPlay.querySelector('.ico-pause').hidden = false;
+      setHidden(this.btnPlay.querySelector('.ico-play'), true);
+      setHidden(this.btnPlay.querySelector('.ico-pause'), false);
       this.btnPlay.setAttribute('aria-label', '일시정지');
       document.getElementById('badge-speed')?.classList.toggle('hidden', false);
     });
 
     p.addEventListener('pause', () => {
-      this.btnPlay.querySelector('.ico-play').hidden = false;
-      this.btnPlay.querySelector('.ico-pause').hidden = true;
+      setHidden(this.btnPlay.querySelector('.ico-play'), false);
+      setHidden(this.btnPlay.querySelector('.ico-pause'), true);
       this.btnPlay.setAttribute('aria-label', '재생');
     });
 
@@ -372,8 +372,8 @@ class Controls {
   // 전체화면 아이콘
   // ─────────────────────────────────────────────────────────
   setFullscreen(on) {
-    $('#btn-fullscreen .ico-fs').hidden = on;
-    $('#btn-fullscreen .ico-fs-exit').hidden = !on;
+    setHidden($('#btn-fullscreen .ico-fs'), on);
+    setHidden($('#btn-fullscreen .ico-fs-exit'), !on);
     document.body.classList.toggle('is-fullscreen', on);
   }
 

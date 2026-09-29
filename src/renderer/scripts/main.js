@@ -5,7 +5,7 @@
  * 실제 동작은 각 모듈( player / audio / video / subtitles / ui/* )에 있고,
  * 여기서는 모듈 간 이벤트와 설정을 연결한다.
  */
-import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS } from './util.js';
+import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden } from './util.js';
 import state from './state.js';
 import { Player } from './player.js';
 import { audio } from './audio.js';
@@ -106,6 +106,18 @@ async function boot() {
 
   document.body.classList.remove('booting');
   window.addEventListener('resize', debounce(() => videoCtl.applyLayout(), 60));
+  // 메타데이터(해상도)를 안 뒤에야 올바른 표시 크기를 계산할 수 있다.
+  // (로드 시점에 배치를 안 하면 intrinsic 크기 그대로 어긋나 보인다)
+  video.addEventListener('loadedmetadata', () => videoCtl.applyLayout());
+  // 재생목록 개폐·패널 변화는 window 리사이즈를 발생시키지 않으므로
+  // 스테이지 크기 변화를 직접 관찰해 비디오 배치를 다시 계산한다.
+  if (typeof ResizeObserver !== 'undefined') {
+    let roTimer = null;
+    new ResizeObserver(() => {
+      if (roTimer) clearTimeout(roTimer);
+      roTimer = setTimeout(() => videoCtl.applyLayout(), 80);
+    }).observe(stage);
+  }
   videoCtl.applyLayout();
 
   // 시작할 때 마지막 파일 복원
@@ -157,10 +169,8 @@ function buildUi() {
   // 최대화 상태에 따라 복원 아이콘으로 전환
   const syncMaxIcon = (maxed) => {
     document.body.classList.toggle('is-maximized', !!maxed);
-    const max = $('#btn-maximize .ico-max');
-    const res = $('#btn-maximize .ico-restore');
-    if (max) max.hidden = !!maxed;
-    if (res) res.hidden = !maxed;
+    setHidden($('#btn-maximize .ico-max'), !!maxed);
+    setHidden($('#btn-maximize .ico-restore'), !maxed);
     $('#btn-maximize')?.setAttribute('aria-label', maxed ? '복원' : '최대화');
   };
   api.on.windowMaximized((maxed) => syncMaxIcon(maxed));
@@ -363,6 +373,13 @@ function bindLifecycle() {
   // 전역 키 처리
   window.addEventListener('keydown', (e) => {
     if (anyModalOpen()) return;
+    // 전체화면에서는 Esc 로 전체화면을 빠져나온다 (Electron 네이티브 전체화면은
+    // 브라우저처럼 Esc 자동 해제가 없어 명시적 처리가 필요)
+    if (e.key === 'Escape' && state.fullscreen) {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
     hotkeys.handle(e);
   }, true);
 

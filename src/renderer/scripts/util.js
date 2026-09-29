@@ -313,6 +313,18 @@ export class Emitter {
   clear(evt) { if (evt) this.#map.delete(evt); else this.#map.clear(); }
 }
 
+/**
+ * 요소 숨김/표시.
+ * SVG 요소에는 `hidden` IDL 프로퍼티가 없어 `.hidden = true` 가
+ * 속성으로 반영되지 않는다(조용한 no-op). 아이콘 토글이 듣지 않는
+ * 원인이므로, 표시 전환은 항상 이 헬퍼로 속성 단위로 처리한다.
+ */
+export function setHidden(node, hidden) {
+  if (!node) return;
+  if (hidden) node.setAttribute('hidden', '');
+  else node.removeAttribute('hidden');
+}
+
 /** 간단한 상태 저장 (renderer 로컬) */
 export const localStore = {
   get(key, fallback) {
