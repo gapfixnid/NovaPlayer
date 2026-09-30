@@ -225,6 +225,37 @@ app.whenReady().then(async () => {
     const closed = await wc.executeJavaScript(\`!document.querySelector('#modal-root .modal')\`);
     check('설정 닫힘', closed === true);
 
+    // ── 재생목록 키보드 + 설정 초기화 새로고침 ──
+    const kb = await wc.executeJavaScript(\`(async () => {
+      const out = {};
+      const list = document.querySelector('#pl-list');
+      list.focus();
+      const key = (k) => list.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+      key('ArrowDown'); key('Enter'); key('Delete'); key('Home'); key('End');
+      await new Promise((r) => setTimeout(r, 300));
+      out.emptyOk = document.querySelectorAll('.pl-item').length === 0;
+      const toolsBtn = document.querySelector('.menu-btn[data-menu="tools"]');
+      toolsBtn.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const item = [...document.querySelectorAll('#menu-popup .ctx-item')].find((b) => (b.textContent || '').includes('설정'));
+      if (!item) return { ...out, settingsOpened: false };
+      item.click();
+      await new Promise((r) => setTimeout(r, 600));
+      const resetBtn = [...document.querySelectorAll('#modal-root .modal-foot button')].find((b) => (b.textContent || '').includes('기본값'));
+      if (!resetBtn) return { ...out, settingsOpened: true, resetFound: false };
+      resetBtn.click();
+      await new Promise((r) => setTimeout(r, 800));
+      const pane = document.querySelector('.set-pane.active');
+      out.resetRows = pane ? pane.querySelectorAll('.set-row, .eq-band, .hk-action').length : -1;
+      out.resetModal = !!document.querySelector('#modal-root .modal');
+      const c = document.querySelector('#modal-root .modal-close');
+      if (c) c.click();
+      await new Promise((r) => setTimeout(r, 300));
+      return out;
+    })()\`).catch((e) => ({ error: e.message }));
+    check('재생목록 빈 상태 키보드 무응답(크래시 없음)', kb.emptyOk === true, kb.error ?? 'ok');
+    check('설정 초기화 후 패널 재생성', (kb.resetRows ?? -1) > 0, kb.error ?? (kb.resetRows + ' rows'));
+
     // ── 샘플 파일 재생 ──
     console.log('\\n[2] 샘플 재생');
     const sample = path.join(SAMPLES, '01-baseline-h264-aac.mp4');

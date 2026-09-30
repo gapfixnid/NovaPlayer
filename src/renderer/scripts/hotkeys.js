@@ -66,6 +66,13 @@ class HotkeyManager {
     if (target?.closest?.('#seekbar')) {
       return false;
     }
+    // 재생목록 포커스 시 목록 키(방향키/Enter/Delete 등)는 목록이 처리.
+    // 전역 단축키까지 발동하면 탐색+커서이동이 겹친다.
+    if (target?.closest?.('#pl-list')) {
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', 'Delete', 'Backspace'].includes(e.key)) {
+        return false;
+      }
+    }
     return true;
   }
 

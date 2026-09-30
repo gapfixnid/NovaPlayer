@@ -4,7 +4,7 @@
  * 지원: 다중 선택, 드래그 재정렬, 필터, 정렬, 셔플, 반복 모드,
  *       M3U/PLS 임포트·익스포트, 자동 저장, 총 재생시간.
  */
-import { el, formatTime, baseName, extName, debounce } from '../util.js';
+import { el, clamp, formatTime, baseName, extName, debounce } from '../util.js';
 import { toastOk, toastInfo, toastError } from './toast.js';
 
 const AUDIO_EXT = new Set(['.mp3', '.m4a', '.aac', '.flac', '.wav', '.wma', '.ogg', '.oga', '.opus', '.ape', '.alac', '.mka', '.ac3', '.dts', '.amr', '.mid', '.midi', '.spx', '.tta', '.dsf', '.dff']);
@@ -18,6 +18,7 @@ export class PlaylistManager {
     this.items = [];
     this.currentIndex = -1;
     this.selection = new Set();
+    this._cursor = -1;            // 키보드 커서 (선택 앵커 겸용)
     this.filter = '';
     this.shuffleMode = false;
     this.shuffleOrder = [];      // 셔플 시 재생을 위한 인덱스 큐
@@ -182,6 +183,7 @@ export class PlaylistManager {
     this.currentIndex = index;
     this.selection.clear();
     this.selection.add(index);
+    this._cursor = index;
     this.renderList();
     this.scrollToCurrent();
     this.onPlay?.(this.items[index], index);
@@ -387,6 +389,42 @@ export class PlaylistManager {
     node?.scrollIntoView({ block: 'nearest' });
   }
 
+  scrollToIndex(index) {
+    const node = this.listNode.querySelector(`.pl-item[data-index="${index}"]`);
+    node?.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** 키보드 커서 이동 + 단일 선택 (Shift면 확장) */
+  moveCursor(next, extend = false) {
+    if (!this.items.length) return;
+    const n = clamp(next, 0, this.items.length - 1);
+    if (extend && this._cursor >= 0) {
+      const [a, b] = [Math.min(this._cursor, n), Math.max(this._cursor, n)];
+      // 기존 선택 유지 + 범위 추가 (축소는 단순 이동으로)
+      for (let i = a; i <= b; i++) this.selection.add(i);
+      this._cursor = n;
+    } else {
+      this._cursor = n;
+      this.selection.clear();
+      this.selection.add(n);
+    }
+    this.renderList();
+    this.scrollToIndex(n);
+  }
+
+  /** 선택 항목 제거 (버튼·Delete 공용) */
+  removeSelected() {
+    if (!this.selection.size) {
+      toastInfo('제거할 항목을 선택하세요');
+      return 0;
+    }
+    const n = this.selection.size;
+    this.removeIndices([...this.selection]);
+    this._cursor = -1;
+    toastOk(`${n}개 항목을 제거했습니다`);
+    return n;
+  }
+
   _bindListEvents() {
     const list = this.listNode;
 
@@ -405,7 +443,44 @@ export class PlaylistManager {
         this.selection.clear();
         this.selection.add(index);
       }
+      this._cursor = index;
       this.renderList();
+    });
+
+    // 키보드 조작: 방향키 이동(Shift 확장) · Enter 재생 · Delete 제거 · Home/End
+    list.addEventListener('keydown', (e) => {
+      if (!this.items.length) return;
+      const cur = this._cursor >= 0 ? this._cursor : this.currentIndex;
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          this.moveCursor((cur < 0 ? -1 : cur) + 1, e.shiftKey);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          this.moveCursor((cur < 0 ? this.items.length : cur) - 1, e.shiftKey);
+          break;
+        case 'Home':
+          e.preventDefault();
+          this.moveCursor(0, e.shiftKey);
+          break;
+        case 'End':
+          e.preventDefault();
+          this.moveCursor(this.items.length - 1, e.shiftKey);
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (cur >= 0) this.playAt(cur);
+          else if (this.currentIndex >= 0) this.playAt(this.currentIndex);
+          break;
+        case 'Delete':
+        case 'Backspace':
+          e.preventDefault();
+          this.removeSelected();
+          break;
+        default:
+          return;
+      }
     });
 
     list.addEventListener('dblclick', (e) => {
@@ -488,12 +563,7 @@ export class PlaylistManager {
       }
     });
 
-    document.getElementById('pl-remove').addEventListener('click', () => {
-      if (!this.selection.size) return toastInfo('제거할 항목을 선택하세요');
-      const n = this.selection.size;
-      this.removeIndices([...this.selection]);
-      toastOk(`${n}개 항목을 제거했습니다`);
-    });
+    document.getElementById('pl-remove').addEventListener('click', () => this.removeSelected());
 
     document.getElementById('pl-clear').addEventListener('click', () => {
       if (!this.items.length) return;

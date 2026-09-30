@@ -840,7 +840,8 @@ export class SettingsPanel {
       const data = await this.api.settings.import();
       if (!data) return;
       this.onReset?.();
-      toastOk('설정을 불러왔습니다. 창을 다시 열어 적용됩니다.');
+      this.refreshOpenPane();
+      toastOk('설정을 불러왔습니다.');
     } catch (err) {
       toastError(`가져오기 실패: ${err.message}`);
     }
@@ -849,7 +850,26 @@ export class SettingsPanel {
   async #reset() {
     const data = await this.api.settings.reset();
     this.onReset?.(data);
+    this.refreshOpenPane();
     toastInfo('설정을 기본값으로 되돌렸습니다');
+  }
+
+  /**
+   * 초기화/가져오기 후 열려 있는 패널을 현재 값으로 다시 그린다.
+   * (슬라이더·체크박스가 옛값을 보여주는 문제 방지)
+   */
+  refreshOpenPane() {
+    const pane = this.panes.get(this.activeTab);
+    if (!pane || !this.modal) return;
+    this.controlsByPath.clear();
+    const ctx = this.#context();
+    pane.replaceChildren();
+    if (this.activeTab === 'hotkeys') {
+      pane.append(this.#renderHotkeys());
+    } else {
+      for (const g of SCHEMA[this.activeTab] ?? []) pane.append(this.#renderGroup(g, ctx));
+      if (!pane.childElementCount) pane.append(el('div', { class: 'muted', text: '설정 항목이 없습니다.' }));
+    }
   }
 }
 
