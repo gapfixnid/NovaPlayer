@@ -81,8 +81,14 @@ function isInside(root, target) {
 function registerHandlers() {
   // ── 렌더러 정적 파일 ──────────────────────────────────────
   protocol.handle(APP_SCHEME, async (request) => {
-    const url = new URL(request.url);
-    let pathname = decodeURIComponent(url.pathname);
+    // 외부 조립 URL(깨진 인코딩)이 throw 로 unhandled rejection 이 되지 않게 방어
+    let pathname;
+    try {
+      const url = new URL(request.url);
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      return new Response('Bad request', { status: 400 });
+    }
     if (pathname === '/' || pathname === '') pathname = '/index.html';
 
     const target = path.resolve(RENDERER_ROOT, `.${pathname}`);
@@ -127,9 +133,8 @@ function registerHandlers() {
 
   // ── 미디어 파일 (Range 지원) ─────────────────────────────
   protocol.handle(MEDIA_SCHEME, async (request) => {
-    const url = new URL(request.url);
     // nova-media://f/<base64url(절대경로)>  ← toMediaUrl() 와 1:1 대응
-    const filePath = fromMediaUrl(url.href);
+    const filePath = fromMediaUrl(request.url);
     if (!filePath || !path.isAbsolute(filePath)) {
       return new Response('Bad media request', { status: 400 });
     }
@@ -246,6 +251,7 @@ function isAllowed(filePath) {
  * 호출과 동시에 allowlist에 등록된다 (서빙 허용의 유일한 경로).
  */
 function toMediaUrl(filePath) {
+  if (typeof filePath !== 'string' || filePath.length === 0) return null;
   const normalized = path.resolve(filePath);
   allowFile(normalized);
   const b64 = Buffer.from(normalized, 'utf8').toString('base64url');
@@ -253,13 +259,14 @@ function toMediaUrl(filePath) {
 }
 
 function fromMediaUrl(url) {
-  const parsed = new URL(url);
-  const b64 = parsed.pathname.replace(/^\//, '');
-  if (!b64) return '';
   try {
+    const parsed = new URL(url);
+    const b64 = parsed.pathname.replace(/^\//, '');
+    if (!b64) return '';
     const decoded = Buffer.from(b64, 'base64url').toString('utf8');
     return decoded.includes('\0') ? '' : decoded;
   } catch {
+    // 잘못된 URL/base64 는 조용히 거부 (핸들러가 400 으로 응답)
     return '';
   }
 }

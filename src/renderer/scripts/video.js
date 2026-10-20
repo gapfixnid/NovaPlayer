@@ -345,12 +345,17 @@ class VideoController {
    * HTMLVideoElement 는 프레임 단위 탐색이 불가능하므로
    * ffmpeg 로 해당 시각의 프레임을 추출해 캔버스에 덮는다.
    *
+   * @param {number} direction -1 뒤로 / +1 앞으로
+   * @param {object} api { frame(path,t), isCurrent() }
+   *   isCurrent: 추출을 기다리는 동안 파일이 바뀌지 않았는지 확인하는 콜백.
+   *              없으면 결과를 현재 파일에 덮어쓴다.
    * @returns {Promise<boolean>} 처리 성공 여부
    */
   async stepFrame(direction, api) {
     const fps = this.detectFps() || 25;
     const duration = this.video.duration;
     if (!Number.isFinite(duration) || duration <= 0) return false;
+    const stale = () => (typeof api.isCurrent === 'function' && !api.isCurrent());
 
     const current = this.frameStep.active ? this.frameStep.time : this.video.currentTime;
     let target = current + direction / fps;
@@ -366,6 +371,8 @@ class VideoController {
 
     // 정확히 목표 프레임에 맞추기 위해 앞뒤 프레임을 추출해 비교
     const imgUrl = await api.frame(this.video.dataset.novaPath, target, { width: 1920, quality: 2 });
+    // 추출 중 다른 파일로 넘어갔으면 오버레이/재생위치를 건드리지 않는다
+    if (stale()) return false;
     if (!imgUrl) {
       // ffmpeg 없으면 프레임 간격 근사 탐색으로 폴백
       if (this.frameStep.active) {

@@ -5,7 +5,7 @@
  * 실제 동작은 각 모듈( player / audio / video / subtitles / ui/* )에 있고,
  * 여기서는 모듈 간 이벤트와 설정을 연결한다.
  */
-import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden, computeSubTime, reanchorSubClock, buildSnapshotName } from './util.js';
+import { $, el, clamp, formatTime, baseName, debounce, makeContextMenu, ICONS, setHidden, computeSubTime, reanchorSubClock, buildSnapshotName, prettyKey } from './util.js';
 import state from './state.js';
 import { Player } from './player.js';
 import { audio } from './audio.js';
@@ -21,7 +21,7 @@ import { showFileInfo, showPlaybackInfo } from './ui/infobar.js';
 import { openModal, anyModalOpen } from './ui/modal.js';
 import { HotkeyManager } from './hotkeys.js';
 import { toastOk, toastInfo, toastWarn, toastError } from './ui/toast.js';
-import { HOTKEY_LABELS } from './constants.js';
+import { HOTKEY_LABELS, DEFAULT_VOLUME } from './constants.js';
 import { SettingsStore } from './settings-store.js';
 
 const api = window.nova;
@@ -526,6 +526,8 @@ function bindPlayer() {
   player.addEventListener('loadstart', () => {
     dropzone.hidden = true;
     clearTimeout(snapshotTimer);
+    // 이전 파일의 탐색바 썸네일 제거 (새 스트립이 준비될 때까지 잘못된 프리뷰 방지)
+    controls.resetStrip?.();
   });
 
   player.addEventListener('info', (e) => {
@@ -1103,6 +1105,9 @@ async function frameStep(direction) {
   if (first) player.pause();
 
   frameStepBusy = true;
+  // 추출을 기다리는 동안 다른 파일이 로드되면 결과를 현재 파일에 적용하지 않는다
+  const token = player.loadToken;
+  const isCurrent = () => token === player.loadToken;
   try {
     const apiFrame = async (path, t) => {
       const file = await api.media.frame(path, t, { width: 1920, quality: 2 });
@@ -1110,7 +1115,9 @@ async function frameStep(direction) {
     };
 
     // video.js 의 stepFrame 는 ffmpeg 결과를 URL 로 받는 형태
-    const ok = await videoCtl.stepFrame(direction, { frame: apiFrame });
+    const ok = await videoCtl.stepFrame(direction, { frame: apiFrame, isCurrent });
+    // 파일이 바뀌었으면 OSD/근사 시킹으로 새 재생 상태를 건드리지 않는다
+    if (!isCurrent()) return;
     if (!ok) {
       // ffmpeg 없음: 프레임레이트 기반 근사 이동
       const fps = videoCtl.detectFps() || 25;
@@ -1477,11 +1484,19 @@ Object.assign(actions, {
 
   // 볼륨
   volumeMute: () => toggleMute(),
+  // 기본 볼륨(DEFAULT_SETTINGS.audio.volume = 80)으로 되돌린다.
+  // 0 으로 내리는 것은 볼륨 '초기화'가 아니라 무음이라 사용자가 소리를 잃는다.
   volumeReset: () => {
-    settings.set('audio.volume', 0);
-    audio.setVolume(0);
-    controls.setVolume(0);
-    osd.volume(0, false);
+    const target = DEFAULT_VOLUME;
+    settings.set('audio.volume', target);
+    if (settings.get('audio.muted')) {
+      settings.set('audio.muted', false);
+      audio.setMuted(false);
+      controls.setMuted(false);
+    }
+    audio.setVolume(target);
+    controls.setVolume(target);
+    osd.volume(target, false);
   },
 
   // 화면

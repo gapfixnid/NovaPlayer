@@ -36,9 +36,12 @@ function pruneCache(maxMB) {
   let total = files.reduce((s, f) => s + f.size, 0);
   if (total <= limit) return 0;
   files.sort((a, b) => a.mtime - b.mtime);
+  // 방금 만들어진 파일(진행 중인 트랜스코딩 산출물)은 건너뛴다
+  const activeCutoff = Date.now() - 60_000;
   let removed = 0;
   for (const f of files) {
     if (total <= limit * 0.8) break;
+    if (f.mtime > activeCutoff) continue;
     try { fs.unlinkSync(f.full); total -= f.size; removed += 1; } catch { /* noop */ }
   }
   return removed;

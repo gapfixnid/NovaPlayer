@@ -154,6 +154,13 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else mainWindow?.show();
   });
+}).catch((err) => {
+  // 초기화 실패가 unhandled rejection 으로 조용히 사라지지 않게 한다
+  logger.error(`앱 초기화 실패: ${err?.stack ?? err?.message ?? err}`);
+  try {
+    dialog.showErrorBox('Nova Player', `앱을 시작할 수 없습니다.\n\n${err?.message ?? err}`);
+  } catch { /* noop */ }
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
@@ -330,12 +337,18 @@ function createWindow() {
 // 트레이
 // ─────────────────────────────────────────────────────────────
 function buildTray() {
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets', 'icon.png')
-    : path.join(__dirname, '..', '..', 'assets', 'icon.png');
+  // 패키징(asar)·개발·테스트 하네스에서 앱 경로가 제각각이므로
+  // 후보를 순서대로 확인해 실제 존재하는 아이콘을 쓴다.
+  // (asar 내부 경로도 fs.existsSync 로 검사 가능)
+  const candidates = [
+    path.join(app.getAppPath(), 'assets', 'icon.png'),   // `electron .` 실행 / 패키징
+    path.join(__dirname, '..', '..', 'assets', 'icon.png'), // 소스 트리 기준
+    path.join(process.resourcesPath ?? '', 'assets', 'icon.png'), // extraResources 로 둔 경우
+  ];
+  const iconPath = candidates.find((c) => c && fs.existsSync(c)) ?? undefined;
 
   try {
-    tray = new (require('electron').Tray)(fs.existsSync(iconPath) ? iconPath : undefined);
+    tray = new (require('electron').Tray)(iconPath);
   } catch (err) {
     logger.warn(`트레이 생성 실패: ${err.message}`);
     return;
@@ -565,7 +578,11 @@ function registerIpc() {
   ipcMain.on('shell:revealFolder', (_e, p) => { if (isSafePath(p)) shell.showItemInFolder(p); });
 
   // ── 미디어 처리 ──
-  ipcMain.handle('media:toUrl', (_e, p) => (isSafePath(p) ? protocol.toMediaUrl(p) : null));
+  // toUrl 은 allowlist 등록을 겸하므로 미디어 확장자만 발급한다
+  // (렌더러가 임의 파일 경로를 넣어 nova-media 접근을 넓히는 것을 방지)
+  ipcMain.handle('media:toUrl', (_e, p) => (
+    isSafePath(p) && lib.isMediaFile(p) ? protocol.toMediaUrl(p) : null
+  ));
   ipcMain.handle('media:stat', async (_e, p) => {
     if (!isSafePath(p)) return null;
     try {
@@ -585,7 +602,17 @@ function registerIpc() {
       if (probeAbort.get(e.sender.id) === controller) probeAbort.delete(e.sender.id);
     });
   });
-  ipcMain.handle('media:remux', (_e, p) => (isSafePath(p) && settings.get('ffmpeg.remuxFallback') ? ffmpeg.remux(p) : null));
+  ipcMain.handle('media:remux', (e, p) => {
+    if (!isSafePath(p) || !settings.get('ffmpeg.remuxFallback')) return null;
+    // 다음 파일 로드 시 렌더러가 보내는 취소 신호로 remux 도 중단한다
+    const controller = new AbortController();
+    const onCancel = () => controller.abort();
+    e.sender.once('media:transcodeCancel', onCancel);
+    const done = () => {
+      try { e.sender.removeListener('media:transcodeCancel', onCancel); } catch { /* noop */ }
+    };
+    return Promise.resolve(ffmpeg.remux(p, { signal: controller.signal })).finally(done);
+  });
   ipcMain.handle('media:transcode', (e, p, opts) => {
     if (!isSafePath(p) || !settings.get('ffmpeg.transcodeFallback')) return null;
     const o = opts ?? {};
@@ -614,7 +641,7 @@ function registerIpc() {
       quality: num(o.quality, 4, 0, 31),
     });
   });
-  ipcMain.handle('media:strip', (_e, p, opts) => {
+  ipcMain.handle('media:strip', async (_e, p, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForThumbnails')) return null;
     const o = opts ?? {};
     // 타일 폭탄(tile=10000x10000 등) 방지: 수치 범위를 강제한다
@@ -626,7 +653,9 @@ function registerIpc() {
       tileH: num(o.tileH, 90, 16, 640),
       cols: num(o.cols, 6, 1, 12),
     };
-    const out = ffmpeg.thumbnailStrip(p, count, safe);
+    // thumbnailStrip 는 Promise 를 반환하므로 await 하지 않으면
+    // out.file(undefined) 로 toMediaUrl 이 터진다
+    const out = await ffmpeg.thumbnailStrip(p, count, safe);
     if (!out) return null;
     return { ...out, url: protocol.toMediaUrl(out.file) };
   });
@@ -766,7 +795,9 @@ function registerIpc() {
   });
 
   // ── 디렉터리 목록 (폴더 열기) ──
-  ipcMain.handle('media:listDirectory', async (_e, dir, { recursive = false } = {}) => {
+  ipcMain.handle('media:listDirectory', async (_e, dir, opts) => {
+    // opts 가 null/비객체로 들어와도 구조 분해 throw 없이 안전하게 처리
+    const recursive = opts?.recursive === true;
     if (!isSafePath(dir)) return [];
     try {
       const st = await fsp.stat(dir);
@@ -779,13 +810,13 @@ function registerIpc() {
       let entries;
       try { entries = await fsp.readdir(current, { withFileTypes: true }); } catch { return; }
       for (const entry of entries) {
+        if (out.length >= 5000) return;
         if (entry.name.startsWith('.')) continue;
         const full = path.join(current, entry.name);
         if (entry.isDirectory()) {
           if (recursive && depth < 4) await walk(full, depth + 1);
         } else if (lib.isMediaFile(full) && !lib.isSubtitleFile(full)) {
           out.push(full);
-          if (out.length >= 5000) return;
         }
       }
     };
@@ -907,10 +938,7 @@ async function expandSelection(filePaths) {
     const e = lib.ext(p);
     if (e === '.m3u' || e === '.m3u8') out.push(...await lib.parseM3u(p));
     else if (e === '.pls') out.push(...await lib.parsePls(p));
-    else if (e === '.mkv' || e === '.mp4' || e === '.avi' || e === '.ts') {
-      // 일반 미디어 컨테이너는 그대로 재생 목록에 추가
-      out.push(p);
-    } else out.push(p);
+    else out.push(p);
   }
   return out.filter((p) => fs.existsSync(p));
 }

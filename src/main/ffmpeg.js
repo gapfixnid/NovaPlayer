@@ -112,6 +112,8 @@ function hasFfprobe() { return !!ffprobePath; }
 function run(bin, args, { timeout = 0, onStderr, signal } = {}) {
   return new Promise((resolve, reject) => {
     if (!bin) return reject(new Error('실행할 바이너리가 없습니다.'));
+    // 이미 중단된 signal 로 spawn 하면 좀비 프로세스가 남으므로 즉시 거부한다
+    if (signal?.aborted) return reject(new Error('작업이 취소되었습니다.'));
     let child;
     try {
       child = spawn(bin, args, {
@@ -128,6 +130,7 @@ function run(bin, args, { timeout = 0, onStderr, signal } = {}) {
     let stderr = '';
     let timer = null;
     let killedByTimeout = false;
+    let aborted = false;
 
     if (timeout > 0) {
       timer = setTimeout(() => { killedByTimeout = true; child.kill('SIGKILL'); }, timeout);
@@ -141,12 +144,13 @@ function run(bin, args, { timeout = 0, onStderr, signal } = {}) {
     });
 
     const cleanup = () => { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
-    const onAbort = () => { try { child.kill('SIGKILL'); } catch { /* noop */ } };
+    const onAbort = () => { aborted = true; try { child.kill('SIGKILL'); } catch { /* noop */ } };
     signal?.addEventListener('abort', onAbort, { once: true });
 
     child.on('error', (err) => { cleanup(); reject(err); });
     child.on('close', (code) => {
       cleanup();
+      if (aborted) return reject(new Error('작업이 취소되었습니다.'));
       if (killedByTimeout) return reject(new Error('시간 초과로 종료되었습니다.'));
       resolve({ code: code ?? -1, stdout, stderr });
     });
@@ -176,7 +180,8 @@ async function probe(filePath, { signal } = {}) {
     if (code !== 0) return null;
     return normalizeProbe(JSON.parse(stdout));
   } catch (err) {
-    logger.warn(`ffprobe 실패 (${path.basename(filePath)}): ${err.message}`);
+    // 사용자가 파일을 빨리 넘겨 abort 한 경우는 정상 흐름이므로 로그를 남기지 않는다
+    if (!signal?.aborted) logger.warn(`ffprobe 실패 (${path.basename(filePath)}): ${err.message}`);
     return null;
   }
 }
@@ -204,6 +209,7 @@ function normalizeProbe(json) {
     colorSpace: s.color_space ?? null,
     colorPrimaries: s.color_primaries ?? null,
     colorTransfer: s.color_transfer ?? null,
+    fieldOrder: s.field_order ?? null,
     videoRotation: extractRotation(s),
     isDefault: s.disposition?.default === 1,
     isForced: s.disposition?.forced === 1,
@@ -263,32 +269,55 @@ function hashKey(...parts) {
   return crypto.createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 16);
 }
 
+/** 실패/중단된 부분 산출물 정리 (없거나 사용 중이면 무시) */
+function safeUnlink(p) {
+  if (!p) return;
+  try { fs.unlinkSync(p); } catch { /* noop */ }
+}
+
+/** 온전한 캐시 파일이 있는지 (0바이트·사라진 파일 방어) */
+function hasCache(p) {
+  try { return fs.existsSync(p) && fs.statSync(p).size > 0; } catch { return false; }
+}
+
 /**
  * 컨테이너만 교체(-c copy). 코덱 지원 문제는 해결 못 하지만
  * "mkv에 opus가 들어간 경우" "flv+h264" 같은 경우를 빠르게 살린다.
  */
 async function remux(filePath, { signal } = {}) {
   if (!ffmpegPath) return null;
+  let part = null;
   try {
     const st = fs.statSync(filePath);
     const out = path.join(tempDir(), `remux_${hashKey(filePath, st.mtimeMs, st.size, 'r')}.mkv`);
+    if (hasCache(out)) {
+      logger.info(`remux 캐시 재사용: ${path.basename(out)}`);
+      return out;
+    }
+    // 최종 경로에 직접 쓰면 중단/실패 시 잘린 파일이 "캐시"로 남는다.
+    // .part 로 쓰고 성공했을 때만 rename 한다.
+    part = `${out}.part`;
     const { code, stderr } = await run(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-i', filePath,
       '-map', '0:v?', '-map', '0:a?', '-map', '0:s?',
       '-c', 'copy',
       '-f', 'matroska',
-      out,
+      part,
     ], { timeout: 20 * 60 * 1000, signal });
-    if (code !== 0 || !fs.existsSync(out) || fs.statSync(out).size === 0) {
+    if (code !== 0 || !hasCache(part)) {
       logger.debug(`remux 실패: ${stderr.slice(0, 400)}`);
+      safeUnlink(part);
       return null;
     }
+    fs.renameSync(part, out);
     logger.info(`remux 성공: ${path.basename(filePath)} → ${path.basename(out)}`);
     return out;
   } catch (err) {
     // statSync 실패(삭제 경합 포함)도 transcode 폴백으로 이어지도록 null 반환
-    logger.warn(`remux 오류: ${err.message}`);
+    safeUnlink(part);
+    if (signal?.aborted) logger.debug('remux 취소됨');
+    else logger.warn(`remux 오류: ${err.message}`);
     return null;
   }
 }
@@ -319,7 +348,7 @@ async function transcode(filePath, opts = {}) {
   } catch { /* 삭제된 파일은 후속 단계에서 실패 처리 */ }
 
   const out = path.join(tempDir(), `tc_${hashKey(filePath, quality, width, audioBitrate, fingerprint)}.mp4`);
-  if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+  if (hasCache(out)) {
     logger.info(`트랜스코딩 캐시 재사용: ${path.basename(out)}`);
     return { path: out, cached: true };
   }
@@ -328,6 +357,8 @@ async function transcode(filePath, opts = {}) {
   const info = await probe(filePath, { signal });
   const total = info?.duration || 0;
 
+  // 중단/실패 시 잘린 파일이 캐시로 남지 않게 .part 로 쓰고 성공 시에만 rename
+  const part = `${out}.part`;
   const args = [
     '-hide_banner', '-loglevel', 'error', '-stats', '-y',
     '-i', filePath,
@@ -337,7 +368,7 @@ async function transcode(filePath, opts = {}) {
     '-movflags', '+faststart',
     '-sn',
     '-f', 'mp4',
-    out,
+    part,
   ];
 
   try {
@@ -353,14 +384,18 @@ async function transcode(filePath, opts = {}) {
         }
       },
     });
-    if (code !== 0 || !fs.existsSync(out) || fs.statSync(out).size === 0) {
+    if (code !== 0 || !hasCache(part)) {
       logger.error(`트랜스코딩 실패: ${stderr.slice(-500)}`);
+      safeUnlink(part);
       return null;
     }
+    fs.renameSync(part, out);
     logger.info(`트랜스코딩 완료: ${path.basename(out)}`);
     return { path: out, cached: false, duration: total };
   } catch (err) {
-    logger.error(`트랜스코딩 오류: ${err.message}`);
+    safeUnlink(part);
+    if (signal?.aborted) logger.debug('트랜스코딩 취소됨');
+    else logger.error(`트랜스코딩 오류: ${err.message}`);
     return null;
   }
 }
@@ -375,7 +410,8 @@ async function extractFrame(filePath, timeSec, { width = 480, quality = 4 } = {}
   let fingerprint = '0';
   try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
   const out = path.join(tempDir(), `frame_${hashKey(filePath, timeSec.toFixed(3), width, quality, fingerprint)}.jpg`);
-  if (fs.existsSync(out) && fs.statSync(out).size > 0) return out;
+  if (hasCache(out)) return out;
+  const part = `${out}.part`;
   try {
     const { code } = await run(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-y',
@@ -386,11 +422,16 @@ async function extractFrame(filePath, timeSec, { width = 480, quality = 4 } = {}
       '-vf', `scale=${width}:-2:flags=fast_bilinear`,
       '-q:v', String(quality),
       '-f', 'image2',
-      out,
+      part,
     ], { timeout: 60000 });
-    if (code !== 0 || !fs.existsSync(out)) return null;
+    if (code !== 0 || !hasCache(part)) {
+      safeUnlink(part);
+      return null;
+    }
+    fs.renameSync(part, out);
     return out;
   } catch (err) {
+    safeUnlink(part);
     logger.debug(`프레임 추출 실패: ${err.message}`);
     return null;
   }
@@ -418,11 +459,12 @@ async function thumbnailStrip(filePath, count = 12, opts = {}) {
   let fingerprint = '0';
   try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
   const out = path.join(tempDir(), `strip_${hashKey(filePath, count, tw, th, cols, fingerprint)}.jpg`);
-  if (fs.existsSync(out) && fs.statSync(out).size > 0) return { file: out, cols, rows, count, duration };
+  if (hasCache(out)) return { file: out, cols, rows, count, duration };
 
   // 0.5% ~ 99.5% 구간에 균등 배치 (앞/뒤 검은 화면 회피)
   const startPct = 0.005;
   const spanPct = 0.99;
+  const part = `${out}.part`;
 
   try {
     const { code, stderr } = await run(ffmpegPath, [
@@ -432,14 +474,17 @@ async function thumbnailStrip(filePath, count = 12, opts = {}) {
       '-frames:v', '1',
       '-q:v', '5',
       '-f', 'image2',
-      out,
+      part,
     ], { timeout: 180000 });
-    if (code !== 0 || !fs.existsSync(out)) {
+    if (code !== 0 || !hasCache(part)) {
       logger.debug(`썸네일 생성 실패: ${stderr.slice(0, 300)}`);
+      safeUnlink(part);
       return null;
     }
+    fs.renameSync(part, out);
     return { file: out, cols, rows, count, duration, startPct, spanPct };
   } catch (err) {
+    safeUnlink(part);
     logger.debug(`썸네일 오류: ${err.message}`);
     return null;
   }

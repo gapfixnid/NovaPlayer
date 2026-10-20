@@ -79,6 +79,8 @@ export class PlaylistManager {
       : -1;
     this.selection.clear();
     this.shuffleOrder = [];
+    // 키보드 커서가 범위를 벗어나면 마지막 항목으로 당긴다 (Shift 확장 앵커 오작동 방지)
+    if (this._cursor >= this.items.length) this._cursor = this.items.length - 1;
     this.afterChange();
   }
 
@@ -321,6 +323,9 @@ export class PlaylistManager {
   afterChange() {
     this.renderList();
     this.updateCounts();
+    // 셔플 순서는 인덱스 큐라 목록이 바뀌면 반드시 다시 만들어야 한다.
+    // (비워둔 채 두면 nextIndex 가 조용히 순차 재생으로 폴백한다)
+    if (this.shuffleMode) this._buildShuffleOrder();
     this.persist();
   }
 

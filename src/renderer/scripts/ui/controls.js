@@ -221,7 +221,9 @@ class Controls {
     });
 
     document.addEventListener('click', (e) => {
-      if (!menu.hidden && !menu.contains(e.target) && e.target !== this.speedBtn) menu.hidden = true;
+      // 버튼 안의 SVG 아이콘을 눌러도(이벤트 타깃이 버튼이 아님) 닫히지 않게
+      // contains 로 검사한다. (target 비교만 하면 즉시 닫혀 열리지 않는다)
+      if (!menu.hidden && !menu.contains(e.target) && !this.speedBtn.contains(e.target)) menu.hidden = true;
     });
 
     menu.querySelectorAll('.speed-presets button').forEach((btn) => {
@@ -379,7 +381,7 @@ class Controls {
       } else this.abMarkerB.hidden = true;
     }
 
-    if (active) {
+    if (active && d > 0) {
       const region = document.createElement('div');
       region.className = 'ab-region';
       region.style.left = `${(a / d) * 100}%`;
@@ -412,12 +414,23 @@ class Controls {
   requestStrip = debounce(async () => {
     const path = this.player.currentPath;
     if (!path || this.stripCache?.path === path) return;
-    const strip = await this.api.media.strip(path, { count: 12, tileW: 160, tileH: 90, cols: 6 });
-    if (strip) {
+    try {
+      const strip = await this.api.media.strip(path, { count: 12, tileW: 160, tileH: 90, cols: 6 });
+      if (!strip) return;
+      // 생성 중 다른 파일로 넘어갔으면 폐기 (다른 영상의 썸네일 표시 방지)
+      if (this.player.currentPath !== path) return;
       strip.path = path;
       this.setThumbnailStrip(strip);
-    }
+    } catch { /* 썸네일 실패는 무시 (선택 기능) */ }
   }, 400);
+
+  /** 파일 전환 시 이전 파일의 썸네일 스트립 제거 */
+  resetStrip() {
+    this.stripCache = null;
+    this.preview.classList.remove('show');
+    this.preview.hidden = true;
+    this.previewImg.removeAttribute('src');
+  }
 }
 
 export { Controls };

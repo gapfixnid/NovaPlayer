@@ -570,8 +570,8 @@ export class SettingsPanel {
         list.append(el('li', {}, [
           el('span', { class: 'ok', style: { color: 'var(--warn)' }, text: '!' }),
           el('div', {}, [
-            el('strong', { text: `${prettyKey(accel)} ` }),
-            `이 ${accel} 조합이 ${actions.length}개 동작에 중복 지정되어 있습니다: `,
+            el('strong', { text: prettyKey(accel) }),
+            ` 조합이 ${actions.length}개 동작에 중복 지정되어 있습니다: `,
             actions.map((a) => HOTKEY_LABELS[a] ?? a).join(', '),
           ]),
         ]));
@@ -808,8 +808,12 @@ export class SettingsPanel {
           el('button', {
             class: 'btn btn-sm', type: 'button', text: '로그 복사',
             onClick: async () => {
-              await navigator.clipboard.writeText(logBox.textContent);
-              toastOk('로그를 클립보드에 복사했습니다');
+              try {
+                await navigator.clipboard.writeText(logBox.textContent);
+                toastOk('로그를 클립보드에 복사했습니다');
+              } catch (err) {
+                toastError(`클립보드 복사 실패: ${err.message}`);
+              }
             },
           }),
           el('button', {
@@ -848,10 +852,14 @@ export class SettingsPanel {
   }
 
   async #reset() {
-    const data = await this.api.settings.reset();
-    this.onReset?.(data);
-    this.refreshOpenPane();
-    toastInfo('설정을 기본값으로 되돌렸습니다');
+    try {
+      const data = await this.api.settings.reset();
+      this.onReset?.(data);
+      this.refreshOpenPane();
+      toastInfo('설정을 기본값으로 되돌렸습니다');
+    } catch (err) {
+      toastError(`초기화 실패: ${err.message}`);
+    }
   }
 
   /**

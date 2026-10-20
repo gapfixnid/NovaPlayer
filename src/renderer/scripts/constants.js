@@ -1,5 +1,8 @@
 /** 렌더러 공용 상수 (main/settings.js 와 동일한 값 유지) */
 
+/** main/settings.js DEFAULT_SETTINGS.audio.volume 과 동일 */
+export const DEFAULT_VOLUME = 80;
+
 export const EQ_PRESETS = {
   flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   rock: [5, 4, 2, -1, -2, 1, 4, 6, 6, 6],
@@ -51,7 +54,7 @@ export const HOTKEY_LABELS = {
   volumeUp: '볼륨 올리기',
   volumeDown: '볼륨 내리기',
   volumeMute: '음소거 전환',
-  volumeReset: '볼륨 0',
+  volumeReset: '볼륨 초기화',
 
   fullscreen: '전체화면',
   windowedFullscreen: '창 전체화면',

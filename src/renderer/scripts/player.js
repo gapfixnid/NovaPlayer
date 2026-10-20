@@ -113,6 +113,9 @@ class Player extends EventTarget {
     this.savedPosition = 0;
     if (opts.resume) {
       const pos = await this.api.position.get(filePath);
+      // 조회 중 다른 파일 로드가 시작되면 이 결과는 폐기해야 한다.
+      // (그대로 대입하면 새 파일에 이전 파일의 위치가 적용된다)
+      if (token !== this.loadToken) return;
       if (pos && pos.p > 3 && (!pos.d || pos.p < pos.d * 0.97)) {
         this.savedPosition = pos.p;
       }
@@ -180,12 +183,17 @@ class Player extends EventTarget {
       const out = await this.api.media.remux(this.currentPath);
       if (token !== this.loadToken) return;
       if (out) {
-        this._emit('fallback', { stage: 'remux', ok: true, path: out });
-        this.fallbackSource = out;
-        this.video.src = await this.api.media.toUrl(out);
-        this.video.load();
-        this._tryPlay();
-        return;
+        const outUrl = await this.api.media.toUrl(out);
+        // URL 변환을 기다리는 사이 새 파일이 로드됐다면 src 를 덮어쓰지 않는다
+        if (token !== this.loadToken) return;
+        if (outUrl) {
+          this._emit('fallback', { stage: 'remux', ok: true, path: out });
+          this.fallbackSource = out;
+          this.video.src = outUrl;
+          this.video.load();
+          this._tryPlay();
+          return;
+        }
       }
     }
 
@@ -201,12 +209,16 @@ class Player extends EventTarget {
 
       if (token !== this.loadToken) return;
       if (result?.path) {
-        this._emit('fallback', { stage: 'transcode', ok: true, path: result.path });
-        this.fallbackSource = result.path;
-        this.video.src = await this.api.media.toUrl(result.path);
-        this.video.load();
-        this._tryPlay();
-        return;
+        const outUrl = await this.api.media.toUrl(result.path);
+        if (token !== this.loadToken) return;
+        if (outUrl) {
+          this._emit('fallback', { stage: 'transcode', ok: true, path: result.path });
+          this.fallbackSource = result.path;
+          this.video.src = outUrl;
+          this.video.load();
+          this._tryPlay();
+          return;
+        }
       }
 
       this._fail('이 파일은 변환으로도 재생할 수 없습니다. 다른 코덱으로 다시 인코딩이 필요합니다.');
