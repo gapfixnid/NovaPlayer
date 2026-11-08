@@ -618,7 +618,7 @@ function registerIpc() {
     const o = opts && typeof opts === 'object' ? opts : {};
     const width = num(o.width, 1920, 16, 7680);
     const quality = num(o.quality, 0, 0, 2);
-    const audioBitrate = /^\\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
+    const audioBitrate = /^\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
       ? o.audioBitrate : '192k';
     const requestToken = num(o.requestToken, 0, 0, Number.MAX_SAFE_INTEGER);
     let lastProgressAt = 0;
