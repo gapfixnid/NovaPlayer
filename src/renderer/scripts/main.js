@@ -440,13 +440,13 @@ function bindLifecycle() {
     document.body.classList.remove('hide-controls');
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
-      if (player.playing && state.fullscreen) document.body.classList.add('hide-controls');
+      if (state.fullscreen) document.body.classList.add('hide-controls');
     }, settings.get('ui.hideControlsDelay') ?? 2800);
   };
   stage.addEventListener('pointermove', scheduleHide);
   stage.addEventListener('pointerleave', () => {
     clearTimeout(hideTimer);
-    if (player.playing && state.fullscreen) document.body.classList.add('hide-controls');
+    if (state.fullscreen) document.body.classList.add('hide-controls');
   });
 }
 
