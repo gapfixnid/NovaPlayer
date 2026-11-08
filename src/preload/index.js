@@ -139,6 +139,7 @@ const api = {
     windowMaximized: (fn) => subscribe('window:maximized', fn),
     fullscreen: (fn) => subscribe('window:fullscreen', fn),
     ffmpegChanged: (fn) => subscribe('app:ffmpegChanged', fn),
+    transcodeProgress: (fn) => subscribe('media:transcodeProgress', fn),
     pause: (fn) => subscribe('lifecycle:pause', fn),
     suspend: (fn) => subscribe('lifecycle:suspend', fn),
     resume: (fn) => subscribe('lifecycle:resume', fn),
