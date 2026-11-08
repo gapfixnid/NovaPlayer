@@ -1094,6 +1094,8 @@ function toggleFullscreen() {
 
 function setFullscreenUi(on) {
   state.fullscreen = on;
+  document.body.classList.toggle('is-fullscreen', on);
+  if (!on) document.body.classList.remove('hide-controls');
   controls.setFullscreen(on);
   // 전체화면에서는 재생목록 패널도 숨겨 영상만 남긴다 (복귀 시 저장된 상태로)
   const panel = document.getElementById('playlist-panel');
