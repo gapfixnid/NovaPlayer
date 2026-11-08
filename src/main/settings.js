@@ -94,6 +94,7 @@ const DEFAULT_SETTINGS = {
     closeToTray: false,
     startInFullscreen: false,
     windowState: null,          // {x,y,width,height,maximized,fullscreen}
+    windowResizeMode: 'keep',   // keep | fit-video
     seekbarShowRemaining: true,
     osdStyle: 'bottom',         // bottom | top | center
   },
