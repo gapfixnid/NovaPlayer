@@ -673,6 +673,9 @@ let loadRequestId = 0;
 async function loadItem(item, { autoplay = true, resume = false } = {}) {
   if (!item?.path) return;
   const requestId = ++loadRequestId;
+  // 파일 전환 의사가 확인되는 즉시 이전 변환을 취소하고 진행률 이벤트를 무효화한다.
+  player.loadToken += 1;
+  try { api.media.cancelTranscode(); } catch { /* noop */ }
 
   const resolved = await api.recent.resolve(item.path);
   if (requestId !== loadRequestId) return;
@@ -905,6 +908,7 @@ async function loadSubtitleFile(subPath, requestId = null) {
     toastOk(`자막 로드: ${baseName(subPath)} (${count}개)`);
     return true;
   } catch (err) {
+    if (requestId !== null && requestId !== loadRequestId) return false;
     toastError(`자막 로드 실패: ${err.message}`);
     return false;
   }
