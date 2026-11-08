@@ -609,15 +609,30 @@ function bindPlayer() {
     }
   }, { once: true });
 
-  // 프레임마다 자막 갱신
+  // 자막은 재생 중에만 프레임 루프를 유지한다.
+  // 일시정지/종료 상태에서는 RAF를 중단해 유휴 CPU 사용을 없앤다.
+  let subtitleRaf = null;
+  const updateSubtitleFrame = () => subRenderer.update(subTime(video.currentTime));
   const renderSubtitles = () => {
-    if (!video.paused) {
-      const t = subTime(video.currentTime);
-      subRenderer.update(t);
+    subtitleRaf = null;
+    updateSubtitleFrame();
+    if (!video.paused && !video.ended) {
+      subtitleRaf = requestAnimationFrame(renderSubtitles);
     }
-    requestAnimationFrame(renderSubtitles);
   };
-  requestAnimationFrame(renderSubtitles);
+  const startSubtitleLoop = () => {
+    if (subtitleRaf === null) subtitleRaf = requestAnimationFrame(renderSubtitles);
+  };
+  const stopSubtitleLoop = () => {
+    if (subtitleRaf !== null) cancelAnimationFrame(subtitleRaf);
+    subtitleRaf = null;
+    updateSubtitleFrame();
+  };
+  video.addEventListener('play', startSubtitleLoop);
+  video.addEventListener('pause', stopSubtitleLoop);
+  video.addEventListener('ended', stopSubtitleLoop);
+  video.addEventListener('seeked', updateSubtitleFrame);
+  updateSubtitleFrame();
 }
 
 /** 자막 시간 (앵커 상대 모델: 배속 변경에도 싱크 유지) */
@@ -653,10 +668,14 @@ async function openPaths(paths, { replace = true, autoplay = true, resume = fals
   await loadItem({ path: paths[0] }, { autoplay, resume });
 }
 
+let loadRequestId = 0;
+
 async function loadItem(item, { autoplay = true, resume = false } = {}) {
   if (!item?.path) return;
+  const requestId = ++loadRequestId;
 
   const resolved = await api.recent.resolve(item.path);
+  if (requestId !== loadRequestId) return;
   if (!resolved) {
     toastError('파일을 찾을 수 없습니다 (이동되었거나 삭제됨)');
     // currentIndex가 -1이면 제거할 게 없다 (좀비 인덱스 방지)
@@ -676,10 +695,12 @@ async function loadItem(item, { autoplay = true, resume = false } = {}) {
   state.current = { path: resolved, name: baseName(resolved), url: null };
   setNowPlaying(baseName(resolved), '');
 
-  // 자막 목록 갱신
-  await discoverSubtitles(resolved);
+  // 자막 목록 갱신 중 사용자가 다른 파일로 이동했으면 이전 요청은 폐기한다.
+  await discoverSubtitles(resolved, requestId);
+  if (requestId !== loadRequestId) return;
 
   await player.load(resolved, { resume });
+  if (requestId !== loadRequestId) return;
   api.recent.push(resolved, { duration: video.duration || 0 });
 
   if (autoplay) {
@@ -833,15 +854,17 @@ $('#recovery-cancel').addEventListener('click', (e) => {
 // ─────────────────────────────────────────────────────────────
 // 자막
 // ─────────────────────────────────────────────────────────────
-async function discoverSubtitles(mediaPath) {
+async function discoverSubtitles(mediaPath, requestId = loadRequestId) {
+  if (requestId !== loadRequestId) return false;
   state.subtitles.list = [];
   state.subtitles.current = -1;
   subRenderer.clear();
 
-  if (!settings.get('subtitle.autoDetect')) return;
+  if (!settings.get('subtitle.autoDetect')) return false;
 
   const found = await api.subtitle.sidecar(mediaPath);
-  if (!found?.length) return;
+  if (requestId !== loadRequestId) return false;
+  if (!found?.length) return false;
 
   // 선호 언어 순으로 정렬
   const preferred = settings.get('subtitle.preferredLanguages') ?? [];
@@ -855,15 +878,17 @@ async function discoverSubtitles(mediaPath) {
 
   // 1순위 자동 로드
   if (found[0]) {
-    await loadSubtitleFile(found[0].path);
-    toastInfo(`자막 자동 인식: ${found[0].name}`);
+    const loaded = await loadSubtitleFile(found[0].path, requestId);
+    if (requestId !== loadRequestId) return false;
+    if (loaded) toastInfo(`자막 자동 인식: ${found[0].name}`);
   }
+  return true;
 }
 
-async function loadSubtitleFile(subPath) {
+async function loadSubtitleFile(subPath, requestId = null) {
   try {
     const data = await api.subtitle.read(subPath);
-    if (!data) return false;
+    if (!data || (requestId !== null && requestId !== loadRequestId)) return false;
 
     const parsed = parseSubtitles(data.text, { fps: state.info?.video?.frameRate ?? 25 });
     let cues = parsed.cues;
