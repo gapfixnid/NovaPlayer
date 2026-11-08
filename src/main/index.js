@@ -7,7 +7,7 @@
  *  - 네트워크 통신 차단 (외부 CDN·트래킹·광고 전면 무력화)
  *  - 모든 파일 접근은 IPC 로만, 경로 검증은 메인에서 수행
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, powerMonitor, nativeTheme, session, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, powerMonitor, nativeTheme, session, clipboard, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
@@ -525,6 +525,30 @@ function registerIpc() {
     mainWindow?.setAlwaysOnTop(!!value, 'screen-saver');
   });
   ipcMain.handle('window:isMaximized', () => !!mainWindow?.isMaximized());
+  ipcMain.handle('window:fitToMedia', (_e, width, height) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFullScreen()
+      || mainWindow.isMaximized() || settings.get('ui.windowResizeMode') !== 'fit-video') return false;
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 16 || h < 16) return false;
+    const current = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(current);
+    const area = display.workArea;
+    const maxW = Math.max(480, Math.floor(area.width * 0.92));
+    const maxH = Math.max(320, Math.floor(area.height * 0.88));
+    const scale = Math.min(1, maxW / w, maxH / h);
+    const nextW = Math.max(480, Math.round(w * scale));
+    const nextH = Math.max(320, Math.round(h * scale));
+    const x = Math.round(current.x + (current.width - nextW) / 2);
+    const y = Math.round(current.y + (current.height - nextH) / 2);
+    mainWindow.setBounds({
+      x: Math.min(Math.max(area.x, x), area.x + area.width - nextW),
+      y: Math.min(Math.max(area.y, y), area.y + area.height - nextH),
+      width: nextW,
+      height: nextH,
+    }, true);
+    return true;
+  });
 
   // ── 대화상자 ──
   ipcMain.handle('dialog:openFiles', async (_e, mode = 'open') => {
