@@ -615,11 +615,23 @@ function registerIpc() {
   });
   ipcMain.handle('media:transcode', (e, p, opts) => {
     if (!isSafePath(p) || !settings.get('ffmpeg.transcodeFallback')) return null;
-    const o = opts ?? {};
+    const o = opts && typeof opts === 'object' ? opts : {};
     const width = num(o.width, 1920, 16, 7680);
     const quality = num(o.quality, 0, 0, 2);
-    const audioBitrate = /^\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
+    const audioBitrate = /^\\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
       ? o.audioBitrate : '192k';
+    const requestToken = num(o.requestToken, 0, 0, Number.MAX_SAFE_INTEGER);
+    let lastProgressAt = 0;
+    const onProgress = (progress, current, total) => {
+      const now = Date.now();
+      // ffmpeg may emit several stats chunks per second; keep IPC traffic bounded.
+      if (progress < 1 && now - lastProgressAt < 100) return;
+      lastProgressAt = now;
+      if (e.sender.isDestroyed()) return;
+      try {
+        e.sender.send('media:transcodeProgress', { requestToken, progress, current, total });
+      } catch { /* renderer may be closing */ }
+    };
     // 완료/실패 후 리스너를 제거해야 취소 리스너가 발신자에 쌓이지 않는다
     const controller = new AbortController();
     const onCancel = () => controller.abort();
@@ -627,9 +639,10 @@ function registerIpc() {
     const done = () => {
       try { e.sender.removeListener('media:transcodeCancel', onCancel); } catch { /* noop */ }
     };
-    // transcode()가 동기 null을 반환해도 되도록 Promise로 감싼다
-    return Promise.resolve(ffmpeg.transcode(p, { ...o, width, quality, audioBitrate, signal: controller.signal }))
-      .finally(done);
+    // IPC로 함수를 전달하지 않고 메인 프로세스에서 진행률 이벤트를 발행한다.
+    return Promise.resolve(ffmpeg.transcode(p, {
+      width, quality, audioBitrate, signal: controller.signal, onProgress,
+    })).finally(done);
   });
   ipcMain.handle('media:frame', (_e, p, t, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForFrameStep')) return null;
