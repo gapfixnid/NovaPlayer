@@ -41,6 +41,7 @@ const api = {
     fullscreen: () => ipcRenderer.send('window:fullscreen'),
     alwaysOnTop: (v) => ipcRenderer.send('window:alwaysOnTop', v),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    fitToMedia: (width, height) => ipcRenderer.invoke('window:fitToMedia', width, height),
   },
 
   // ── 파일 ───────────────────────────────────────────────
