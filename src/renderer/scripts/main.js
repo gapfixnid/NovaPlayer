@@ -120,7 +120,19 @@ async function boot() {
   window.addEventListener('resize', debounce(() => videoCtl.applyLayout(), 60));
   // 메타데이터(해상도)를 안 뒤에야 올바른 표시 크기를 계산할 수 있다.
   // (로드 시점에 배치를 안 하면 intrinsic 크기 그대로 어긋나 보인다)
-  video.addEventListener('loadedmetadata', () => videoCtl.applyLayout());
+  video.addEventListener('loadedmetadata', () => {
+    videoCtl.applyLayout();
+    if (settings.get('ui.windowResizeMode') === 'fit-video' && video.videoWidth && video.videoHeight) {
+      const rotation = ((videoCtl.rotation + (videoCtl.videoRotationMeta || 0)) % 180 + 180) % 180;
+      const swapped = rotation === 90;
+      const width = swapped ? video.videoHeight : video.videoWidth;
+      const height = swapped ? video.videoWidth : video.videoHeight;
+      const ratio = { '1:1': 1, '4:3': 4 / 3, '16:9': 16 / 9, '16:10': 16 / 10, '21:9': 21 / 9, '3:2': 3 / 2 }[settings.get('video.aspectMode')];
+      const adjustedWidth = ratio ? (width / height < ratio ? height * ratio : width) : width;
+      const adjustedHeight = ratio ? (width / height < ratio ? height : width / ratio) : height;
+      api.window.fitToMedia(Math.round(adjustedWidth), Math.round(adjustedHeight)).catch(() => {});
+    }
+  });
   // 재생목록 개폐·패널 변화는 window 리사이즈를 발생시키지 않으므로
   // 스테이지 크기 변화를 직접 관찰해 비디오 배치를 다시 계산한다.
   if (typeof ResizeObserver !== 'undefined') {
