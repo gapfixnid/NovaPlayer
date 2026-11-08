@@ -36,6 +36,7 @@ const SCHEMA = {
         { path: 'ui.showMenubar', type: 'check', label: '메뉴바 표시' },
         { path: 'ui.showControlsOnHover', type: 'check', label: '마우스 올리면 컨트롤 표시' },
         { path: 'ui.hideControlsDelay', type: 'range', label: '컨트롤 숨김 지연', min: 500, max: 6000, step: 200, unit: 'ms' },
+        { path: 'ui.windowResizeMode', type: 'select', label: '영상 재생 시 창 크기', options: [['keep', '현재 창 크기 유지'], ['fit-video', '영상 크기에 맞춰 창 조절']] },
         { path: 'ui.osdStyle', type: 'select', label: 'OSD 위치', options: [['bottom', '하단'], ['top', '상단'], ['center', '가운데']] },
         { path: 'ui.startInFullscreen', type: 'check', label: '시작할 때 전체화면' },
         { path: 'ui.pauseOnMinimize', type: 'check', label: '최소화 시 일시정지' },
