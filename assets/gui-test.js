@@ -402,10 +402,13 @@ app.whenReady().then(async () => {
         wc.executeJavaScript(
           '(async () => { const api = window.nova; const entry = ' + aviEntryJson + '; ' +
           'if (!entry) return { skipped: true }; ' +
-          'let result; try { result = await api.media.transcode(entry.path, { width: 320, quality: 0 }); } ' +
-          'catch (e) { return { error: String((e && e.message) || e) }; } ' +
+          'let progressCount = 0; const off = api.on.transcodeProgress((p) => { if (p.requestToken === 4242) progressCount++; }); ' +
+          'let result; try { result = await api.media.transcode(entry.path, { width: 320, quality: 0, requestToken: 4242 }); } ' +
+          'catch (e) { off(); return { error: String((e && e.message) || e) }; } ' +
+          'await new Promise((resolve) => setTimeout(resolve, 50)); off(); ' +
           'if (!result || !result.path) return { error: "empty transcode output" }; ' +
-          'const r = await (' + playFile + ')(result.path); r.cached = !!result.cached; return r; })()'
+          'if (!result.cached && progressCount === 0) return { error: "transcode progress event was not received" }; ' +
+          'const r = await (' + playFile + ')(result.path); r.cached = !!result.cached; r.progressCount = progressCount; return r; })()'
         ).catch((e) => ({ error: e.message })),
         new Promise((resolve) => setTimeout(() => resolve({ error: 'transcode 180s timeout' }), 180000)),
       ]);
