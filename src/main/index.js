@@ -24,6 +24,17 @@ const { installWindowMenu } = require('./menubar');
 const isDev = process.argv.includes('--dev');
 const isTest = process.argv.includes('--test');
 
+// Chromium's accelerated video decoder is selected at process startup.
+// Read only this whitelisted preference before app.ready; changing it later
+// requires a restart because Chromium's media pipeline is already initialized.
+try {
+  const startupSettingsPath = path.join(app.getPath('userData'), 'settings.json');
+  const startupSettings = JSON.parse(fs.readFileSync(startupSettingsPath, 'utf8'));
+  if (startupSettings?.video?.hardwareDecode === 'off') {
+    app.commandLine.appendSwitch('disable-accelerated-video-decode');
+  }
+} catch { /* first launch or malformed settings: keep Chromium defaults */ }
+
 // ─────────────────────────────────────────────────────────────
 // 단일 인스턴스
 // ─────────────────────────────────────────────────────────────
@@ -519,12 +530,37 @@ function registerIpc() {
   ipcMain.on('window:minimizeToTray', () => { mainWindow?.hide(); updateTray(); });
   ipcMain.on('window:fullscreen', () => {
     if (!mainWindow) return;
-    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+    if (mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+      return;
+    }
+    const displays = screen.getAllDisplays();
+    const primary = screen.getPrimaryDisplay();
+    const mode = settings.get('ui.fullscreenDisplay') ?? 'current';
+    const target = mode === 'primary' ? primary
+      : mode === 'secondary' ? (displays.find((d) => d.id !== primary.id) ?? screen.getDisplayMatching(mainWindow.getBounds()))
+        : screen.getDisplayMatching(mainWindow.getBounds());
+    if (target) mainWindow.setBounds(target.bounds);
+    mainWindow.setFullScreen(true);
   });
   ipcMain.on('window:alwaysOnTop', (_e, value) => {
     mainWindow?.setAlwaysOnTop(!!value, 'screen-saver');
   });
   ipcMain.handle('window:isMaximized', () => !!mainWindow?.isMaximized());
+  ipcMain.handle('window:displayInfo', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    const d = screen.getDisplayMatching(mainWindow.getBounds());
+    return {
+      id: d.id,
+      label: d.label || (d.internal ? '내장 디스플레이' : '외부 디스플레이'),
+      bounds: d.bounds,
+      colorSpace: d.colorSpace || '',
+      colorDepth: d.colorDepth || 0,
+      depthPerComponent: d.depthPerComponent || 0,
+      displayFrequency: d.displayFrequency || 0,
+      isPrimary: d.id === screen.getPrimaryDisplay().id,
+    };
+  });
   ipcMain.handle('window:fitToMedia', (_e, width, height) => {
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFullScreen()
       || mainWindow.isMaximized() || settings.get('ui.windowResizeMode') !== 'fit-video') return false;
