@@ -70,6 +70,27 @@ let tray = null;
 let isQuitting = false;
 let registeredShortcuts = new Set();
 let fullscreenRestoreBounds = null;
+let fullscreenRestoreMaximized = false;
+
+function toggleFullscreenWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isFullScreen()) {
+    mainWindow.setFullScreen(false);
+    return;
+  }
+  fullscreenRestoreMaximized = mainWindow.isMaximized();
+  fullscreenRestoreBounds = fullscreenRestoreMaximized
+    ? mainWindow.getNormalBounds()
+    : mainWindow.getBounds();
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  const mode = settings?.get('ui.fullscreenDisplay') ?? 'current';
+  const target = mode === 'primary' ? primary
+    : mode === 'secondary' ? (displays.find((d) => d.id !== primary.id) ?? screen.getDisplayMatching(mainWindow.getBounds()))
+      : screen.getDisplayMatching(mainWindow.getBounds());
+  if (target) mainWindow.setBounds(target.bounds);
+  mainWindow.setFullScreen(true);
+}
 
 /** 렌더러가 알려준 현재 파일 경로 (네이티브 메뉴의 "경로 복사" 용) */
 let currentFilePath = null;
@@ -106,7 +127,7 @@ function handleMenuCommand(command) {
       else mainWindow.maximize();
       break;
     case 'fullscreen':
-      mainWindow?.setFullScreen(!mainWindow.isFullScreen());
+      toggleFullscreenWindow();
       break;
     case 'alwaysOnTop': {
       const next = !settings.get('alwaysOnTop');
@@ -269,7 +290,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     if (state.maximized) mainWindow.maximize();
     mainWindow.show();
-    if (settings.get('ui.startInFullscreen') && state.maximized) mainWindow.setFullScreen(true);
+    if (settings.get('ui.startInFullscreen') && state.maximized) toggleFullscreenWindow();
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   });
 
@@ -297,9 +318,14 @@ function createWindow() {
   mainWindow.on('enter-full-screen', () => { saveState(); sendToRenderer('window:fullscreen', true); });
   mainWindow.on('leave-full-screen', () => {
     const restore = fullscreenRestoreBounds;
+    const wasMaximized = fullscreenRestoreMaximized;
     fullscreenRestoreBounds = null;
+    fullscreenRestoreMaximized = false;
     if (restore && mainWindow && !mainWindow.isDestroyed()) {
-      try { mainWindow.setBounds(restore); } catch { /* display may have been disconnected */ }
+      try {
+        mainWindow.setBounds(restore);
+        if (wasMaximized) mainWindow.maximize();
+      } catch { /* display may have been disconnected */ }
     }
     saveState();
     sendToRenderer('window:fullscreen', false);
@@ -537,22 +563,7 @@ function registerIpc() {
   });
   ipcMain.on('window:close', () => mainWindow?.close());
   ipcMain.on('window:minimizeToTray', () => { mainWindow?.hide(); updateTray(); });
-  ipcMain.on('window:fullscreen', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isFullScreen()) {
-      mainWindow.setFullScreen(false);
-      return;
-    }
-    fullscreenRestoreBounds = mainWindow.getBounds();
-    const displays = screen.getAllDisplays();
-    const primary = screen.getPrimaryDisplay();
-    const mode = settings.get('ui.fullscreenDisplay') ?? 'current';
-    const target = mode === 'primary' ? primary
-      : mode === 'secondary' ? (displays.find((d) => d.id !== primary.id) ?? screen.getDisplayMatching(mainWindow.getBounds()))
-        : screen.getDisplayMatching(mainWindow.getBounds());
-    if (target) mainWindow.setBounds(target.bounds);
-    mainWindow.setFullScreen(true);
-  });
+  ipcMain.on('window:fullscreen', () => toggleFullscreenWindow());
   ipcMain.on('window:alwaysOnTop', (_e, value) => {
     mainWindow?.setAlwaysOnTop(!!value, 'screen-saver');
   });
