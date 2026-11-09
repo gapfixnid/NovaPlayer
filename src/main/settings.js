@@ -134,7 +134,7 @@ const DEFAULT_SETTINGS = {
     flipV: false,
     deinterlace: 'auto',        // auto | on | off
     hwDecodeNote: true,
-    hardwareDecode: 'auto',     // auto | off (Chromium startup preference; restart required)
+    hardwareDecode: 'auto',     // auto | on | off (Chromium startup preference; restart required)
   },
 
   audio: {
