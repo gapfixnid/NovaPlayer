@@ -30,8 +30,11 @@ const isTest = process.argv.includes('--test');
 try {
   const startupSettingsPath = path.join(app.getPath('userData'), 'settings.json');
   const startupSettings = JSON.parse(fs.readFileSync(startupSettingsPath, 'utf8'));
-  if (startupSettings?.video?.hardwareDecode === 'off') {
+  const decodeMode = startupSettings?.video?.hardwareDecode;
+  if (decodeMode === 'off') {
     app.commandLine.appendSwitch('disable-accelerated-video-decode');
+  } else if (decodeMode === 'on') {
+    app.commandLine.appendSwitch('enable-accelerated-video-decode');
   }
 } catch { /* first launch or malformed settings: keep Chromium defaults */ }
 
