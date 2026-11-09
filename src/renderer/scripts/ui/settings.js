@@ -118,12 +118,12 @@ const SCHEMA = {
           }).catch(() => {
             status.textContent = `HDR 감지: ${rangeHigh ? '지원 가능성 감지' : '감지되지 않음'} · 색역: ${gamut} · 색 깊이: ${depth || '-'} bit`;
           });
-          return el('div', { class: 'set-row' }, [
+          return el('div', { class: 'set-row stack' }, [
             el('div', { class: 'set-label' }, [
               el('span', { text: '현재 출력 환경' }),
               el('small', { text: '모니터와 Chromium이 보고하는 기능 정보' }),
             ]),
-            status,
+            el('div', { class: 'set-control' }, [status]),
           ]);
         } },
       ],
