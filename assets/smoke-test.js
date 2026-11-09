@@ -68,7 +68,7 @@ check('paths 초기화', () => {
 check('영상 출력 기본 설정', () => {
   assert(DEFAULT_SETTINGS.video.hardwareDecode === 'auto', '하드웨어 디코딩 기본값은 자동이어야 함');
   assert(DEFAULT_SETTINGS.ui.fullscreenDisplay === 'current', '전체화면 기본 모니터는 현재 창이어야 함');
-  assert(DEFAULT_SETTINGS.video.hardwareDecode === 'auto' || DEFAULT_SETTINGS.video.hardwareDecode === 'off', '잘못된 디코딩 정책');
+  assert(['auto', 'on', 'off'].includes(DEFAULT_SETTINGS.video.hardwareDecode), '잘못된 디코딩 정책');
   return '하드웨어 디코딩 자동 · 전체화면 현재 모니터';
 });
 
