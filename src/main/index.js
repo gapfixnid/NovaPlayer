@@ -69,6 +69,7 @@ let settings = null;
 let tray = null;
 let isQuitting = false;
 let registeredShortcuts = new Set();
+let fullscreenRestoreBounds = null;
 
 /** 렌더러가 알려준 현재 파일 경로 (네이티브 메뉴의 "경로 복사" 용) */
 let currentFilePath = null;
@@ -294,7 +295,15 @@ function createWindow() {
   mainWindow.on('maximize', saveState);
   mainWindow.on('unmaximize', saveState);
   mainWindow.on('enter-full-screen', () => { saveState(); sendToRenderer('window:fullscreen', true); });
-  mainWindow.on('leave-full-screen', () => { saveState(); sendToRenderer('window:fullscreen', false); });
+  mainWindow.on('leave-full-screen', () => {
+    const restore = fullscreenRestoreBounds;
+    fullscreenRestoreBounds = null;
+    if (restore && mainWindow && !mainWindow.isDestroyed()) {
+      try { mainWindow.setBounds(restore); } catch { /* display may have been disconnected */ }
+    }
+    saveState();
+    sendToRenderer('window:fullscreen', false);
+  });
 
   // 최소화 정책
   mainWindow.on('minimize', () => {
@@ -534,6 +543,7 @@ function registerIpc() {
       mainWindow.setFullScreen(false);
       return;
     }
+    fullscreenRestoreBounds = mainWindow.getBounds();
     const displays = screen.getAllDisplays();
     const primary = screen.getPrimaryDisplay();
     const mode = settings.get('ui.fullscreenDisplay') ?? 'current';
