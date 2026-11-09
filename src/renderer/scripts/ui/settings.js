@@ -138,7 +138,7 @@ const SCHEMA = {
         { path: 'video.flipH', type: 'check', label: '좌우 반전' },
         { path: 'video.flipV', type: 'check', label: '상하 반전' },
         { path: 'video.deinterlace', type: 'select', label: '인터레이스 제거', options: [['auto', '자동 (필드 순서 감지)'], ['on', '항상 켜기'], ['off', '끄기']], hint: '자동 모드는 실제로 인터레이스 기록된 영상에서만 켜집니다.' },
-        { path: 'video.hardwareDecode', type: 'select', label: '하드웨어 디코딩', options: [['auto', '자동 (Chromium 기본값)'], ['off', '사용 안 함']], hint: '변경 사항은 앱을 완전히 종료한 뒤 다시 실행해야 적용됩니다.' },
+        { path: 'video.hardwareDecode', type: 'select', label: '하드웨어 디코딩', options: [['auto', '자동 (Chromium 기본값)'], ['on', '하드웨어 디코딩 우선'], ['off', '사용 안 함']], hint: '변경 사항은 앱을 완전히 종료한 뒤 다시 실행해야 적용됩니다.' },
       ],
     },
   ],
