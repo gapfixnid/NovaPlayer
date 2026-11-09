@@ -95,6 +95,7 @@ const DEFAULT_SETTINGS = {
     startInFullscreen: false,
     windowState: null,          // {x,y,width,height,maximized,fullscreen}
     windowResizeMode: 'keep',   // keep | fit-video
+    fullscreenDisplay: 'current', // current | primary | secondary
     seekbarShowRemaining: true,
     osdStyle: 'bottom',         // bottom | top | center
   },
@@ -133,6 +134,7 @@ const DEFAULT_SETTINGS = {
     flipV: false,
     deinterlace: 'auto',        // auto | on | off
     hwDecodeNote: true,
+    hardwareDecode: 'auto',     // auto | off (Chromium startup preference; restart required)
   },
 
   audio: {
