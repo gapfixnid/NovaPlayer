@@ -407,8 +407,11 @@ async function transcode(filePath, opts = {}) {
 /** 특정 시각의 프레임을 JPEG 로 추출 (프레임 단위 이동, 썸네일 공용) */
 async function extractFrame(filePath, timeSec, { width = 480, quality = 4 } = {}) {
   if (!ffmpegPath || !Number.isFinite(timeSec)) return null;
-  let fingerprint = '0';
-  try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
+  let fingerprint = '0-0';
+  try {
+    const st = fs.statSync(filePath);
+    fingerprint = `${st.mtimeMs}-${st.size}`;
+  } catch { /* noop */ }
   const out = path.join(tempDir(), `frame_${hashKey(filePath, timeSec.toFixed(3), width, quality, fingerprint)}.jpg`);
   if (hasCache(out)) return out;
   const part = `${out}.part`;
@@ -456,21 +459,27 @@ async function thumbnailStrip(filePath, count = 12, opts = {}) {
     tw = Math.max(16, Math.floor(tw * k));
     th = Math.max(16, Math.floor(th * k));
   }
-  let fingerprint = '0';
-  try { fingerprint = String(fs.statSync(filePath).mtimeMs); } catch { /* noop */ }
+  let fingerprint = '0-0';
+  try {
+    const st = fs.statSync(filePath);
+    fingerprint = `${st.mtimeMs}-${st.size}`;
+  } catch { /* noop */ }
   const out = path.join(tempDir(), `strip_${hashKey(filePath, count, tw, th, cols, fingerprint)}.jpg`);
-  if (hasCache(out)) return { file: out, cols, rows, count, duration };
+  if (hasCache(out)) return { file: out, cols, rows, count, duration, startPct: 0.005, spanPct: 0.99 };
 
   // 0.5% ~ 99.5% 구간에 균등 배치 (앞/뒤 검은 화면 회피)
   const startPct = 0.005;
   const spanPct = 0.99;
+  const startTime = duration * startPct;
+  const sampleFps = count / (duration * spanPct);
   const part = `${out}.part`;
 
   try {
     const { code, stderr } = await run(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-y',
+      '-ss', startTime.toFixed(3),
       '-i', filePath,
-      '-vf', `fps=${count}/(duration*${spanPct}),scale=${tw}:${th},tile=${cols}x${rows}`,
+      '-vf', `fps=${sampleFps.toFixed(8)},scale=${tw}:${th}:flags=fast_bilinear,tile=${cols}x${rows}`,
       '-frames:v', '1',
       '-q:v', '5',
       '-f', 'image2',

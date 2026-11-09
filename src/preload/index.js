@@ -41,6 +41,8 @@ const api = {
     fullscreen: () => ipcRenderer.send('window:fullscreen'),
     alwaysOnTop: (v) => ipcRenderer.send('window:alwaysOnTop', v),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    fitToMedia: (width, height) => ipcRenderer.invoke('window:fitToMedia', width, height),
+    displayInfo: () => ipcRenderer.invoke('window:displayInfo'),
   },
 
   // ── 파일 ───────────────────────────────────────────────
@@ -139,6 +141,7 @@ const api = {
     windowMaximized: (fn) => subscribe('window:maximized', fn),
     fullscreen: (fn) => subscribe('window:fullscreen', fn),
     ffmpegChanged: (fn) => subscribe('app:ffmpegChanged', fn),
+    transcodeProgress: (fn) => subscribe('media:transcodeProgress', fn),
     pause: (fn) => subscribe('lifecycle:pause', fn),
     suspend: (fn) => subscribe('lifecycle:suspend', fn),
     resume: (fn) => subscribe('lifecycle:resume', fn),

@@ -302,8 +302,23 @@ body.is-dragging .dropzone-inner::after {
 }
 .stage-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
-/* ─────────── 전체화면: 영상만 표시 ─────────── */
+/* ─────────── 전체화면: 영상 우선 + 필요 시 컨트롤 ─────────── */
 body.is-fullscreen .workspace { height: 100vh; }
-/* 하단 컨트롤바 자체를 숨긴다 (마우스 이동에도 나타나지 않음).
-   조작은 키보드(F / Enter / Esc / Space / 방향키)와 더블클릭으로 한다. */
-body.is-fullscreen .controls { display: none; }
+body.is-fullscreen .controls {
+  position: fixed;
+  z-index: 80;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--controls-h);
+  background: linear-gradient(transparent, rgba(0, 0, 0, .88) 18%);
+  border-top-color: transparent;
+  transition: opacity .22s ease, transform .22s ease;
+}
+body.is-fullscreen.hide-controls,
+body.is-fullscreen.hide-controls .stage { cursor: none; }
+body.is-fullscreen.hide-controls .controls {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}

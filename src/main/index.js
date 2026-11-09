@@ -7,7 +7,7 @@
  *  - 네트워크 통신 차단 (외부 CDN·트래킹·광고 전면 무력화)
  *  - 모든 파일 접근은 IPC 로만, 경로 검증은 메인에서 수행
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, powerMonitor, nativeTheme, session, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, powerMonitor, nativeTheme, session, clipboard, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
@@ -23,6 +23,20 @@ const { installWindowMenu } = require('./menubar');
 
 const isDev = process.argv.includes('--dev');
 const isTest = process.argv.includes('--test');
+
+// Chromium's accelerated video decoder is selected at process startup.
+// Read only this whitelisted preference before app.ready; changing it later
+// requires a restart because Chromium's media pipeline is already initialized.
+try {
+  const startupSettingsPath = path.join(app.getPath('userData'), 'settings.json');
+  const startupSettings = JSON.parse(fs.readFileSync(startupSettingsPath, 'utf8'));
+  const decodeMode = startupSettings?.video?.hardwareDecode;
+  if (decodeMode === 'off') {
+    app.commandLine.appendSwitch('disable-accelerated-video-decode');
+  } else if (decodeMode === 'on') {
+    app.commandLine.appendSwitch('enable-accelerated-video-decode');
+  }
+} catch { /* first launch or malformed settings: keep Chromium defaults */ }
 
 // ─────────────────────────────────────────────────────────────
 // 단일 인스턴스
@@ -58,6 +72,28 @@ let settings = null;
 let tray = null;
 let isQuitting = false;
 let registeredShortcuts = new Set();
+let fullscreenRestoreBounds = null;
+let fullscreenRestoreMaximized = false;
+
+function toggleFullscreenWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isFullScreen()) {
+    mainWindow.setFullScreen(false);
+    return;
+  }
+  fullscreenRestoreMaximized = mainWindow.isMaximized();
+  fullscreenRestoreBounds = fullscreenRestoreMaximized
+    ? mainWindow.getNormalBounds()
+    : mainWindow.getBounds();
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  const mode = settings?.get('ui.fullscreenDisplay') ?? 'current';
+  const target = mode === 'primary' ? primary
+    : mode === 'secondary' ? (displays.find((d) => d.id !== primary.id) ?? screen.getDisplayMatching(mainWindow.getBounds()))
+      : screen.getDisplayMatching(mainWindow.getBounds());
+  if (target) mainWindow.setBounds(target.bounds);
+  mainWindow.setFullScreen(true);
+}
 
 /** 렌더러가 알려준 현재 파일 경로 (네이티브 메뉴의 "경로 복사" 용) */
 let currentFilePath = null;
@@ -94,7 +130,7 @@ function handleMenuCommand(command) {
       else mainWindow.maximize();
       break;
     case 'fullscreen':
-      mainWindow?.setFullScreen(!mainWindow.isFullScreen());
+      toggleFullscreenWindow();
       break;
     case 'alwaysOnTop': {
       const next = !settings.get('alwaysOnTop');
@@ -257,7 +293,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     if (state.maximized) mainWindow.maximize();
     mainWindow.show();
-    if (settings.get('ui.startInFullscreen') && state.maximized) mainWindow.setFullScreen(true);
+    if (settings.get('ui.startInFullscreen') && state.maximized) toggleFullscreenWindow();
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   });
 
@@ -283,7 +319,20 @@ function createWindow() {
   mainWindow.on('maximize', saveState);
   mainWindow.on('unmaximize', saveState);
   mainWindow.on('enter-full-screen', () => { saveState(); sendToRenderer('window:fullscreen', true); });
-  mainWindow.on('leave-full-screen', () => { saveState(); sendToRenderer('window:fullscreen', false); });
+  mainWindow.on('leave-full-screen', () => {
+    const restore = fullscreenRestoreBounds;
+    const wasMaximized = fullscreenRestoreMaximized;
+    fullscreenRestoreBounds = null;
+    fullscreenRestoreMaximized = false;
+    if (restore && mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.setBounds(restore);
+        if (wasMaximized) mainWindow.maximize();
+      } catch { /* display may have been disconnected */ }
+    }
+    saveState();
+    sendToRenderer('window:fullscreen', false);
+  });
 
   // 최소화 정책
   mainWindow.on('minimize', () => {
@@ -517,14 +566,49 @@ function registerIpc() {
   });
   ipcMain.on('window:close', () => mainWindow?.close());
   ipcMain.on('window:minimizeToTray', () => { mainWindow?.hide(); updateTray(); });
-  ipcMain.on('window:fullscreen', () => {
-    if (!mainWindow) return;
-    mainWindow.setFullScreen(!mainWindow.isFullScreen());
-  });
+  ipcMain.on('window:fullscreen', () => toggleFullscreenWindow());
   ipcMain.on('window:alwaysOnTop', (_e, value) => {
     mainWindow?.setAlwaysOnTop(!!value, 'screen-saver');
   });
   ipcMain.handle('window:isMaximized', () => !!mainWindow?.isMaximized());
+  ipcMain.handle('window:displayInfo', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    const d = screen.getDisplayMatching(mainWindow.getBounds());
+    return {
+      id: d.id,
+      label: d.label || (d.internal ? '내장 디스플레이' : '외부 디스플레이'),
+      bounds: d.bounds,
+      colorSpace: d.colorSpace || '',
+      colorDepth: d.colorDepth || 0,
+      depthPerComponent: d.depthPerComponent || 0,
+      displayFrequency: d.displayFrequency || 0,
+      isPrimary: d.id === screen.getPrimaryDisplay().id,
+    };
+  });
+  ipcMain.handle('window:fitToMedia', (_e, width, height) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFullScreen()
+      || mainWindow.isMaximized() || settings.get('ui.windowResizeMode') !== 'fit-video') return false;
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 16 || h < 16) return false;
+    const current = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(current);
+    const area = display.workArea;
+    const maxW = Math.max(480, Math.floor(area.width * 0.92));
+    const maxH = Math.max(320, Math.floor(area.height * 0.88));
+    const scale = Math.min(1, maxW / w, maxH / h);
+    const nextW = Math.max(480, Math.round(w * scale));
+    const nextH = Math.max(320, Math.round(h * scale));
+    const x = Math.round(current.x + (current.width - nextW) / 2);
+    const y = Math.round(current.y + (current.height - nextH) / 2);
+    mainWindow.setBounds({
+      x: Math.min(Math.max(area.x, x), area.x + area.width - nextW),
+      y: Math.min(Math.max(area.y, y), area.y + area.height - nextH),
+      width: nextW,
+      height: nextH,
+    }, true);
+    return true;
+  });
 
   // ── 대화상자 ──
   ipcMain.handle('dialog:openFiles', async (_e, mode = 'open') => {
@@ -615,11 +699,23 @@ function registerIpc() {
   });
   ipcMain.handle('media:transcode', (e, p, opts) => {
     if (!isSafePath(p) || !settings.get('ffmpeg.transcodeFallback')) return null;
-    const o = opts ?? {};
+    const o = opts && typeof opts === 'object' ? opts : {};
     const width = num(o.width, 1920, 16, 7680);
     const quality = num(o.quality, 0, 0, 2);
     const audioBitrate = /^\d+k$/.test(o.audioBitrate ?? '') && o.audioBitrate.length <= 8
       ? o.audioBitrate : '192k';
+    const requestToken = num(o.requestToken, 0, 0, Number.MAX_SAFE_INTEGER);
+    let lastProgressAt = 0;
+    const onProgress = (progress, current, total) => {
+      const now = Date.now();
+      // ffmpeg may emit several stats chunks per second; keep IPC traffic bounded.
+      if (progress < 1 && now - lastProgressAt < 100) return;
+      lastProgressAt = now;
+      if (e.sender.isDestroyed()) return;
+      try {
+        e.sender.send('media:transcodeProgress', { requestToken, progress, current, total });
+      } catch { /* renderer may be closing */ }
+    };
     // 완료/실패 후 리스너를 제거해야 취소 리스너가 발신자에 쌓이지 않는다
     const controller = new AbortController();
     const onCancel = () => controller.abort();
@@ -627,9 +723,10 @@ function registerIpc() {
     const done = () => {
       try { e.sender.removeListener('media:transcodeCancel', onCancel); } catch { /* noop */ }
     };
-    // transcode()가 동기 null을 반환해도 되도록 Promise로 감싼다
-    return Promise.resolve(ffmpeg.transcode(p, { ...o, width, quality, audioBitrate, signal: controller.signal }))
-      .finally(done);
+    // IPC로 함수를 전달하지 않고 메인 프로세스에서 진행률 이벤트를 발행한다.
+    return Promise.resolve(ffmpeg.transcode(p, {
+      width, quality, audioBitrate, signal: controller.signal, onProgress,
+    })).finally(done);
   });
   ipcMain.handle('media:frame', (_e, p, t, opts) => {
     if (!isSafePath(p) || !ffmpeg.hasFfmpeg() || !settings.get('ffmpeg.useForFrameStep')) return null;

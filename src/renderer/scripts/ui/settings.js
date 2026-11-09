@@ -36,6 +36,8 @@ const SCHEMA = {
         { path: 'ui.showMenubar', type: 'check', label: '메뉴바 표시' },
         { path: 'ui.showControlsOnHover', type: 'check', label: '마우스 올리면 컨트롤 표시' },
         { path: 'ui.hideControlsDelay', type: 'range', label: '컨트롤 숨김 지연', min: 500, max: 6000, step: 200, unit: 'ms' },
+        { path: 'ui.windowResizeMode', type: 'select', label: '영상 재생 시 창 크기', options: [['keep', '현재 창 크기 유지'], ['fit-video', '영상 크기에 맞춰 창 조절']] },
+        { path: 'ui.fullscreenDisplay', type: 'select', label: '전체화면 표시 모니터', options: [['current', '현재 창이 있는 모니터'], ['primary', '주 모니터'], ['secondary', '보조 모니터'],], hint: '보조 모니터가 없으면 현재 모니터를 사용합니다.' },
         { path: 'ui.osdStyle', type: 'select', label: 'OSD 위치', options: [['bottom', '하단'], ['top', '상단'], ['center', '가운데']] },
         { path: 'ui.startInFullscreen', type: 'check', label: '시작할 때 전체화면' },
         { path: 'ui.pauseOnMinimize', type: 'check', label: '최소화 시 일시정지' },
@@ -91,6 +93,42 @@ const SCHEMA = {
       ],
     },
     {
+      title: 'HDR · 색상 출력 정보',
+      desc: 'Chromium의 시스템 색상 관리를 사용합니다. HDR 출력은 영상 인코딩, Windows HDR 설정, GPU 및 모니터 지원에 따라 자동 결정됩니다.',
+      rows: [
+        { render: (ctx) => {
+          const status = el('div', { class: 'set-group-desc', text: '디스플레이 정보를 확인하는 중…' });
+          const rangeHigh = typeof window.matchMedia === 'function'
+            && window.matchMedia('(dynamic-range: high)').matches;
+          const gamut = typeof window.matchMedia === 'function'
+            ? (window.matchMedia('(color-gamut: rec2020)').matches ? 'BT.2020'
+              : window.matchMedia('(color-gamut: p3)').matches ? 'Display P3' : 'sRGB 범위')
+            : '확인 불가';
+          const depth = Number(window.screen?.colorDepth) || 0;
+          Promise.resolve(ctx.api.window.displayInfo()).then((d) => {
+            const lines = [
+              `현재 출력 모니터: ${d?.label ?? '정보 없음'}`,
+              `HDR 표시 가능성: ${rangeHigh ? '브라우저에서 HDR 지원 감지' : '표준 동적 범위 또는 감지되지 않음'}`,
+              `브라우저 색역: ${gamut} · 화면 색 깊이: ${depth || '-'} bit`,
+              `디스플레이 색공간: ${d?.colorSpace || '운영체제 정보 없음'}`,
+              `색상 채널 깊이: ${d?.depthPerComponent ? `${d.depthPerComponent} bit` : '정보 없음'}`,
+              '참고: HDR 지원 감지는 HDR 모드가 실제 활성화됐거나 현재 영상이 HDR이라는 뜻은 아닙니다.',
+            ];
+            status.textContent = lines.join(' · ');
+          }).catch(() => {
+            status.textContent = `HDR 감지: ${rangeHigh ? '지원 가능성 감지' : '감지되지 않음'} · 색역: ${gamut} · 색 깊이: ${depth || '-'} bit`;
+          });
+          return el('div', { class: 'set-row stack' }, [
+            el('div', { class: 'set-label' }, [
+              el('span', { text: '현재 출력 환경' }),
+              el('small', { text: '모니터와 Chromium이 보고하는 기능 정보' }),
+            ]),
+            el('div', { class: 'set-control' }, [status]),
+          ]);
+        } },
+      ],
+    },
+    {
       title: '화면',
       rows: [
         { path: 'video.zoomMode', type: 'select', label: '확대/축소', options: [['fit', '화면에 맞게'], ['fill', '화면 채우기'], ['1:1', '100%'], ['2:1', '200%'], ['custom', '사용자 지정']] },
@@ -100,6 +138,7 @@ const SCHEMA = {
         { path: 'video.flipH', type: 'check', label: '좌우 반전' },
         { path: 'video.flipV', type: 'check', label: '상하 반전' },
         { path: 'video.deinterlace', type: 'select', label: '인터레이스 제거', options: [['auto', '자동 (필드 순서 감지)'], ['on', '항상 켜기'], ['off', '끄기']], hint: '자동 모드는 실제로 인터레이스 기록된 영상에서만 켜집니다.' },
+        { path: 'video.hardwareDecode', type: 'select', label: '하드웨어 디코딩', options: [['auto', '자동 (Chromium 기본값)'], ['on', '하드웨어 디코딩 우선'], ['off', '사용 안 함']], hint: '변경 사항은 앱을 완전히 종료한 뒤 다시 실행해야 적용됩니다.' },
       ],
     },
   ],

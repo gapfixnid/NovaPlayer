@@ -37,6 +37,14 @@ class Player extends EventTarget {
     this.onLoaded = null;
     this.onStateChange = null;
     this.frameRate = 0;
+    this._offTranscodeProgress = api.on?.transcodeProgress?.((detail) => {
+      if (!detail || detail.requestToken !== this.loadToken) return;
+      this.onFallbackProgress?.({
+        progress: detail.progress,
+        current: detail.current,
+        total: detail.total,
+      });
+    }) ?? null;
     this._boundEvents();
   }
 
@@ -70,6 +78,8 @@ class Player extends EventTarget {
     for (const [type, fn] of Object.entries(this._handlers ?? {})) {
       this.video.removeEventListener(type, fn);
     }
+    try { this._offTranscodeProgress?.(); } catch { /* noop */ }
+    this._offTranscodeProgress = null;
   }
 
   _emit(type, detail) {
@@ -204,7 +214,7 @@ class Player extends EventTarget {
       const result = await this.api.media.transcode(this.currentPath, {
         width: 1920,
         quality: quality === 'quality' ? 2 : quality === 'balanced' ? 1 : 0,
-        onProgress: (p, cur, total) => this.onFallbackProgress?.({ progress: p, current: cur, total }),
+        requestToken: token,
       }).catch(() => null);
 
       if (token !== this.loadToken) return;
