@@ -76,6 +76,8 @@ check('JsonStore 기본값 병합', () => {
   const store = new JsonStore('smoke-settings.json', DEFAULT_SETTINGS);
   store.set('audio.volume', 55);
   store.set('video.brightness', 20);
+  store.set('video.hardwareDecode', 'off');
+  store.set('ui.fullscreenDisplay', 'secondary');
   assert(store.get('audio.volume') === 55, '단일 키 저장 실패');
 
   // set() 은 디바운스되므로 즉시 flush 후 새 인스턴스로 영속성 확인
@@ -83,8 +85,10 @@ check('JsonStore 기본값 병합', () => {
   const reloaded = new JsonStore('smoke-settings.json', DEFAULT_SETTINGS);
   assert(reloaded.get('audio.volume') === 55, `재로드 후 값 보존 실패 (got ${reloaded.get('audio.volume')})`);
   assert(reloaded.get('video.brightness') === 20, '중첩 키 보존 실패');
+  assert(reloaded.get('video.hardwareDecode') === 'off', '하드웨어 디코딩 설정 저장 실패');
+  assert(reloaded.get('ui.fullscreenDisplay') === 'secondary', '전체화면 모니터 설정 저장 실패');
   assert(reloaded.get('audio.equalizerBands').length === 10, '배열 기본값 손상');
-  return 'vol=55 brightness=20 (중첩 포함)';
+  return 'vol=55 brightness=20 + decoder/display preferences';
 });
 
 check('JsonStore 알 수 없는 키 무시', () => {
